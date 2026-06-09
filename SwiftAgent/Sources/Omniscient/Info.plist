@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>O Omniscient precisa acessar o microfone para ouvir o comando 'Agente' e transcrever sua voz.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>O Omniscient usa o reconhecimento de fala para entender seus comandos de voz localmente.</string>
+    <key>NSAppleMusicUsageDescription</key>
+    <string>O Omniscient precisa acessar o Apple Music para controlar suas músicas.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>O Omniscient precisa acessar seu calendário para ler seus compromissos.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>O Omniscient precisa acessar seus lembretes para criar novas tarefas.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>O Omniscient precisa capturar sua tela para analisar o conteúdo visual.</string>
+</dict>
+</plist>
