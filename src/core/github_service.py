@@ -80,3 +80,20 @@ class GithubService:
             return f"Pull Request criado com sucesso: {pr.html_url}"
         except Exception as e:
             return f"Erro ao criar Pull Request: {e}"
+
+    def merge_pull_request(self, repo_name, pr_number, merge_method="squash"):
+        """Mescla um Pull Request aberto."""
+        if not self.client: return "GitHub Token não configurado."
+        try:
+            repo = self.client.get_repo(repo_name)
+            pr = repo.get_pull(int(pr_number))
+            if pr.state != "open":
+                return f"O PR #{pr_number} não está aberto (estado atual: {pr.state})."
+            
+            status = pr.merge(merge_method=merge_method)
+            if status.merged:
+                return f"PR #{pr_number} mesclado com sucesso ({merge_method})."
+            else:
+                return f"Falha ao mesclar PR #{pr_number}. Pode haver conflitos."
+        except Exception as e:
+            return f"Erro ao mesclar Pull Request: {e}"
