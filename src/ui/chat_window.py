@@ -19,6 +19,7 @@ class ChatWindow(QWidget):
         self.voice_service = VoiceService(on_wake_word_detected=None)
         self.chat_history = []
         self.tray_icon = None
+        self.is_processing = False
         self.init_ui()
         
         # Conecta os sinais
@@ -135,32 +136,35 @@ class ChatWindow(QWidget):
 
     def _process_response(self, text):
         # O MLX pode ser lento, então rodamos em background
-        
-        # Verifica se o usuário pediu análise da tela
-        vision_keywords = ["resumo da tela", "o que tem na tela", "analise a tela", "descreva a tela", "oq tem na tela", "vê a tela"]
-        if any(keyword in text.lower() for keyword in vision_keywords):
-            self.append_to_history("Capturando e analisando tela...", "system")
-            try:
-                image_b64 = self.llm_client.vision_service.capture_screen_base64()
-                if image_b64:
-                    prompt = f"O usuário pediu: '{text}'. Descreva o que está na tela baseado nesse pedido."
-                    response = self.llm_client.chat(
-                        messages=[{"role": "user", "content": prompt}],
-                        include_vision=True,
-                        image_b64=image_b64
-                    )
-                    if response:
-                        self.append_to_history(response, "assistant")
-                        self.voice_service.speak(response)
-                        return
-            except Exception as e:
-                self.append_to_history(f"Erro na análise: {e}", "system")
+        self.is_processing = True
+        try:
+            # Verifica se o usuário pediu análise da tela
+            vision_keywords = ["resumo da tela", "o que tem na tela", "analise a tela", "descreva a tela", "oq tem na tela", "vê a tela"]
+            if any(keyword in text.lower() for keyword in vision_keywords):
+                self.append_to_history("Capturando e analisando tela...", "system")
+                try:
+                    image_b64 = self.llm_client.vision_service.capture_screen_base64()
+                    if image_b64:
+                        prompt = f"O usuário pediu: '{text}'. Descreva o que está na tela baseado nesse pedido."
+                        response = self.llm_client.chat(
+                            messages=[{"role": "user", "content": prompt}],
+                            include_vision=True,
+                            image_b64=image_b64
+                        )
+                        if response:
+                            self.append_to_history(response, "assistant")
+                            self.voice_service.speak(response)
+                            return
+                except Exception as e:
+                    self.append_to_history(f"Erro na análise: {e}", "system")
 
-        # Comportamento padrão de chat
-        response = self.llm_client.chat(self.chat_history)
-        if response:
-            self.append_to_history(response, "assistant")
-            self.voice_service.speak(response)
+            # Comportamento padrão de chat
+            response = self.llm_client.chat(self.chat_history)
+            if response:
+                self.append_to_history(response, "assistant")
+                self.voice_service.speak(response)
+        finally:
+            self.is_processing = False
 
     def process_silent_command(self, text):
         """Processa comando vindo da Wake Word."""

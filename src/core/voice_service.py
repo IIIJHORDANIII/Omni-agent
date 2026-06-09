@@ -51,6 +51,8 @@ class VoiceService:
             # Motor de Voz: Nativo macOS (Siri)
             self.voice = "Siri" # Tenta usar a voz da Siri
             self.current_playback_process = None
+            self.active_session_id = 0
+            self.abort_listen = False
             
             # Modelo Whisper (Transcrição)
             self.whisper_model = "mlx-community/whisper-large-v3-turbo"
@@ -198,6 +200,7 @@ class VoiceService:
     def listen(self, continuous_mode=False):
         """Escuta um comando completo. Se continuous_mode=True, escuta imediatamente sem pre-buffer."""
         print("Ouvindo comando...")
+        self.abort_listen = False # Reset para nova escuta
         start_time = time.time()
         recorded_audio = []
         silence_start = None
@@ -221,6 +224,10 @@ class VoiceService:
             self.wake_word_window = []
 
         while time.time() - start_time < max_duration:
+            if self.abort_listen:
+                print("Escuta interrompida por nova Wake Word.")
+                return None
+
             while not self.audio_buffer.empty():
                 chunk = self.audio_buffer.get()
                 audio_np = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
@@ -238,6 +245,8 @@ class VoiceService:
                 break
             time.sleep(0.01) 
             
+        if self.abort_listen: return None
+        
         recorded_audio.extend(silence_pad)
         
         # Filtro de ruído curto
@@ -273,13 +282,15 @@ class VoiceService:
             return None
 
     def stop_speaking(self):
-        """Interrompe a fala nativa imediatamente."""
-        if self.current_playback_process:
-            try:
-                subprocess.run(["killall", "say"], capture_output=True)
-            except:
-                pass
-            self.current_playback_process = None
+        """Interrompe a fala nativa imediatamente e cancela filas pendentes."""
+        self.active_session_id += 1
+        self.abort_listen = True
+        try:
+            # killall é a forma mais segura no macOS de parar o 'say' instantaneamente
+            subprocess.run(["killall", "say"], capture_output=True)
+        except:
+            pass
+        self.current_playback_process = None
         self.is_speaking = False
 
     def speak(self, text):
@@ -288,35 +299,52 @@ class VoiceService:
             print("DEBUG VOZ: Texto vazio recebido, ignorando.")
             return
         
+        # Sinaliza imediatamente que estamos em processo de fala
+        self.is_speaking = True
+        
+        # Captura a sessão no momento em que a fala foi solicitada
+        session_at_request = self.active_session_id
+        
         def _speak():
             # Lock para evitar que múltiplas falas se sobreponham
             print(f"DEBUG VOZ: Tentando obter lock para falar...")
             with self.speaking_lock:
+                # Se a sessão mudou (interrupção), descartamos esta fala pendente
+                if session_at_request != self.active_session_id:
+                    print(f"DEBUG VOZ: Fala descartada (Sessão {session_at_request} != {self.active_session_id})")
+                    return
+
                 try:
+                    self.is_speaking = True # Garante novamente sob o lock
+                    if self.status_callback: self.status_callback("SPEAKING", True)
+                    
                     print(f"DEBUG VOZ: Preparando texto: {text[:50]}...")
                     # Limpeza ultra-agressiva para garantir que NADA técnico seja falado
                     clean_text = text
                     
                     # 1. Remove qualquer conteúdo entre tags <think> (mesmo que malformadas)
-                    clean_text = re.sub(r'<think>.*?</think>', '', clean_text, flags=re.DOTALL | re.IGNORECASE)
-                    clean_text = re.sub(r'.*?</think>', '', clean_text, flags=re.DOTALL | re.IGNORECASE) # Caso começou no pensamento
-                    clean_text = re.sub(r'<think>.*', '', clean_text, flags=re.DOTALL | re.IGNORECASE) # Caso não fechou
-                    clean_text = clean_text.replace('<think>', '').replace('</think>', '')
+                    # Usamos um padrão mais robusto para pegar blocos de pensamento do DeepSeek
+                    clean_text = re.sub(r'<(think|reasoning)>.*?</\1>', '', clean_text, flags=re.DOTALL | re.IGNORECASE)
+                    clean_text = re.sub(r'<(think|reasoning)>.*', '', clean_text, flags=re.DOTALL | re.IGNORECASE)
+                    clean_text = re.sub(r'.*?</(think|reasoning)>', '', clean_text, flags=re.DOTALL | re.IGNORECASE)
                     
-                    # 2. Remove blocos de código markdown
+                    # 2. Remove blocos de código markdown e JSON
                     clean_text = re.sub(r'```.*?```', '', clean_text, flags=re.DOTALL)
+                    clean_text = re.sub(r'\{.*?\}', '', clean_text, flags=re.DOTALL)
                     
-                    # 3. Remove caracteres de formatação e colchetes (JSON/Tags)
+                    # 3. Remove caracteres de formatação e colchetes
                     clean_text = re.sub(r'[*#_`~]', '', clean_text)
                     clean_text = re.sub(r'\[.*?\]', '', clean_text)
-                    clean_text = re.sub(r'\{.*?\}', '', clean_text)
                     
                     # 4. Remove termos técnicos de depuração que vazam
-                    tech_terms = ['DEBUG', 'JSON', 'NEED_TRANSLATION', 'assistant', 'user', 'system']
+                    tech_terms = ['DEBUG', 'JSON', 'NEED_TRANSLATION', 'assistant', 'user', 'system', 'RAW', 'think', 'reasoning']
                     for term in tech_terms:
                         clean_text = re.sub(rf'\b{term}\b', '', clean_text, flags=re.IGNORECASE)
                     
-                    # 5. Humanização final
+                    # 5. Remove tags HTML residuais
+                    clean_text = re.sub(r'<[^>]+>', '', clean_text)
+                    
+                    # 6. Humanização final
                     clean_text = clean_text.replace('UI', 'interface').strip()
                     
                     # Se após a limpeza o texto for curto demais ou puramente técnico, ignora
@@ -324,15 +352,15 @@ class VoiceService:
                         print("DEBUG VOZ: Texto descartado por ser puramente técnico ou vazio.")
                         return
 
-                    self.is_speaking = True
-                    if self.status_callback: self.status_callback("SPEAKING", True)
+                    # Re-checa sessão após limpeza pesada
+                    if session_at_request != self.active_session_id: return
 
                     print(f"DEBUG VOZ: EXECUTANDO 'say {clean_text[:30]}...'")
                     
                     # No macOS, o comando 'say' é muito robusto. 
-                    # Vamos rodar da forma mais simples possível.
-                    process = subprocess.Popen(["say", clean_text])
-                    process.wait()
+                    self.current_playback_process = subprocess.Popen(["say", clean_text])
+                    self.current_playback_process.wait()
+                    self.current_playback_process = None
                     
                     print(f"DEBUG VOZ: Finalizado com sucesso.")
 

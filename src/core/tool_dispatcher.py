@@ -228,6 +228,10 @@ class ToolDispatcher:
                     result = ExecutionService.set_focus_mode(params.get("mode", "Não Perturbe"))
                 elif tool == "screenshot":
                     result = ExecutionService.capture_screen(params.get("path"))
+                elif tool == "register_user":
+                    from core.vision_service import VisionService
+                    vision = VisionService()
+                    result = vision.register_user()
                 elif tool == "download_file":
                     result = ExecutionService.download_file(params.get("url"), params.get("path"))
                 elif tool == "media_cut":

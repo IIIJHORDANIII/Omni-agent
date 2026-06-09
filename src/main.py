@@ -43,6 +43,7 @@ from core.terminal_server import TerminalOverwatchServer
 from core.recall_service import RecallService
 from core.night_watch import NightWatch
 from core.auto_organizer import AutoOrganizerService
+from core.sentinela_service import SentinelService
 from ui.ghost_popup import GhostPopup
 
 class OmniscientAgent(QApplication):
@@ -115,6 +116,10 @@ class OmniscientAgent(QApplication):
         # Briefing Service
         self.briefing = BriefingService(self.chat_window.llm_client.manager)
         
+        # Sentinela Service (Monitoramento Visual Adaptativo)
+        self.sentinela = SentinelService(self.chat_window.voice_service, self.hud)
+        self.sentinela.start()
+        
         # Services
         # O Monitor Service analisa a tela periodicamente em busca de eventos importantes
         # Agora passamos as dependências corretas (LLM, Voz e Memória)
@@ -143,20 +148,27 @@ class OmniscientAgent(QApplication):
             self.on_wake_word
         )
         
-        # Sequência de inicialização silenciosa (Saudação via Briefing Service apenas)
+        # Sequência de inicialização (Saudação imediata)
         self.sound.play_system_sound("Hero")
+        self.chat_window.voice_service.speak("Sistemas online, Senhor. Omniscient carregado.")
         
-        # Briefing opcional no startup (Saudação baseada na hora)
+        # Briefing opcional no startup (Saudação baseada na hora - roda em background)
         threading.Thread(target=self._run_startup_briefing, daemon=True).start()
         
         print("Omniscient Agent iniciado e pronto!")
 
     def _run_startup_briefing(self):
-        """Gera e fala o briefing matinal."""
+        """Gera e fala o briefing matinal com reconhecimento visual."""
         try:
             import mlx.core as mx
             # Garante inicialização do MLX na thread via context manager
             with mx.stream(mx.gpu):
+                # Tenta reconhecer o Jhordan visualmente
+                is_jhordan = self.chat_window.llm_client.vision_service.recognize_user()
+                
+                if is_jhordan:
+                    self.chat_window.voice_service.speak("Identidade confirmada. Bem-vindo de volta, Jhordan.")
+                
                 briefing_text = self.briefing.generate_morning_briefing()
                 self.chat_window.voice_service.speak(briefing_text)
         except Exception as e:
@@ -217,11 +229,16 @@ Seja extremamente breve (máximo 1 frase).
         print("Swift Executor não encontrado. Iniciando...")
         # Procura o binário no bundle ou no local de desenvolvimento
         bundle_path = resource_path("Omniscient")
-        dev_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SwiftAgent/.build/arm64-apple-macosx/debug/Omniscient")
+        dev_path_debug = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SwiftAgent/.build/arm64-apple-macosx/debug/Omniscient")
+        dev_path_release = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SwiftAgent/.build/arm64-apple-macosx/release/Omniscient")
 
-        path = bundle_path if os.path.exists(bundle_path) else dev_path
+        # Prioridade: Bundle > Release > Debug
+        path = None
+        if os.path.exists(bundle_path): path = bundle_path
+        elif os.path.exists(dev_path_release): path = dev_path_release
+        elif os.path.exists(dev_path_debug): path = dev_path_debug
 
-        if os.path.exists(path):
+        if path:
             try:
                 subprocess.Popen([path], start_new_session=True)
                 time.sleep(2) # Aguarda o socket ser criado
@@ -256,7 +273,8 @@ Seja extremamente breve (máximo 1 frase).
         text = self.chat_window.voice_service.listen()
         
         if text and len(text.strip()) > 1:
-            # Processa o comando inicial
+            # ENTRA NO CICLO DE COMANDO (Não chamamos process_silent_command aqui
+            # pois o _handle_command_cycle já vai lidar com isso e abrir o loop contínuo)
             self._handle_command_cycle(text)
         else:
             self.hud.display_signal.emit("...", "IDLE", 1)
@@ -279,10 +297,11 @@ Seja extremamente breve (máximo 1 frase).
         self.hud.display_signal.emit("Pronto.", "SUCCESS", 2000)
         
         # Loop de Conversa Contínua (Follow-up)
-        # Aguarda o agente começar a falar (se for o caso)
-        time.sleep(1) 
-        
-        # Aguarda ele terminar de falar
+        # 1. Aguarda o processamento da LLM (que pode demorar)
+        while getattr(self.chat_window, 'is_processing', False):
+            time.sleep(0.5)
+            
+        # 2. Agora aguarda o agente terminar de falar
         while self.chat_window.voice_service.is_speaking:
             time.sleep(0.1)
             

@@ -24,27 +24,43 @@ class VoiceIndicator(QWidget):
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(60, 60)
+        self.setFixedSize(100, 100)
         
         layout = QVBoxLayout(self)
         self.circle = QFrame()
-        self.circle.setFixedSize(30, 30)
-        self.circle.setStyleSheet("background-color: #00d4ff; border-radius: 15px; border: 2px solid white;")
+        self.circle.setFixedSize(40, 40)
+        # Estilo JARVIS: Brilho externo e borda neon
+        self.circle.setStyleSheet("""
+            background-color: rgba(0, 212, 255, 30);
+            border: 2px solid #00d4ff;
+            border-radius: 20px;
+        """)
         layout.addWidget(self.circle, alignment=Qt.AlignmentFlag.AlignCenter)
         self.hide()
 
     def show_state(self, state="LISTENING"):
-        colors = {"LISTENING": "#ff3b30", "SPEAKING": "#00d4ff"}
-        color = colors.get(state, "#00d4ff")
-        self.circle.setStyleSheet(f"background-color: {color}; border-radius: 15px; border: 2px solid white;")
+        colors = {
+            "LISTENING": "rgba(255, 59, 48, 100)", # Vermelho suave
+            "SPEAKING": "rgba(0, 212, 255, 100)"   # Azul suave
+        }
+        border_colors = {"LISTENING": "#ff3b30", "SPEAKING": "#00d4ff"}
+        
+        color = colors.get(state, "rgba(0, 212, 255, 100)")
+        border = border_colors.get(state, "#00d4ff")
+        
+        self.circle.setStyleSheet(f"""
+            background-color: {color};
+            border: 3px solid {border};
+            border-radius: 20px;
+        """)
         
         # Posiciona no canto superior direito com margem
         screen = self.screen().geometry()
-        self.move(screen.width() - 80, 40)
+        self.move(screen.width() - 120, 60)
         self.show()
 
 class HUDOverlay(QWidget):
-    # Sinal para permitir atualizações de threads de background com segurança
+    # ... (sinais e init seguem iguais)
     display_signal = pyqtSignal(str, str, int) # text, state, duration
     context_signal = pyqtSignal(dict) # dict com file, linear, github
     voice_signal = pyqtSignal(str, bool) # state, visible
@@ -53,7 +69,6 @@ class HUDOverlay(QWidget):
         super().__init__()
         print(f"DEBUG: HUD init - HAS_NATIVE_BLUR: {HAS_NATIVE_BLUR}")
         self.is_dark = True 
-        self.init_ui()
         
         # Voice Indicator Popup
         self.voice_indicator = VoiceIndicator()
@@ -61,6 +76,8 @@ class HUDOverlay(QWidget):
         self.display_signal.connect(self.update_hud)
         self.context_signal.connect(self.update_context_wall)
         self.voice_signal.connect(self._handle_voice_indicator)
+        
+        self.init_ui()
         
         # Timer para telemetria
         self.telemetry_timer = QTimer()
@@ -84,10 +101,11 @@ class HUDOverlay(QWidget):
             if window:
                 window.setOpaque_(False)
                 window.setBackgroundColor_(objc.lookUpClass('NSColor').clearColor())
+                # Força o conteúdo a aparecer sobre o blur
+                window.setHasShadow_(True)
 
-            effect_view = NSVisualEffectView.alloc().initWithFrame_(
-                ((0, 0), (self.width(), self.height()))
-            )
+            effect_view = NSVisualEffectView.alloc().init()
+            effect_view.setFrame_(((0, 0), (self.width(), self.height())))
             effect_view.setMaterial_(2) # Dark
             effect_view.setState_(1)
             effect_view.setBlendingMode_(0)
@@ -108,51 +126,70 @@ class HUDOverlay(QWidget):
         text_color = "white"
         accent_color = "#00d4ff"
         
-        # FIX: Agora passamos 'self' para vincular o layout à janela
         self.main_layout = QHBoxLayout(self)
         self.main_layout.setContentsMargins(15, 10, 15, 10)
         self.main_layout.setSpacing(20)
         
         # --- TELEMETRIA ---
         self.telemetry_frame = QFrame()
-        self.telemetry_frame.setStyleSheet(f"background-color: rgba(10, 10, 15, 180); border: 1px solid {accent_color}55; border-radius: 10px;")
+        self.telemetry_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(10, 10, 15, 230); 
+                border: 1px solid {accent_color}88; 
+                border-radius: 10px;
+            }}
+        """)
         tel_layout = QVBoxLayout(self.telemetry_frame)
         self.cpu_label = QLabel("CPU: --%")
         self.ram_label = QLabel("RAM: --%")
         self.bat_label = QLabel("BAT: --%")
         for lbl in [self.cpu_label, self.ram_label, self.bat_label]:
-            lbl.setStyleSheet(f"color: {accent_color}; font-size: 10px; font-weight: bold; font-family: '.AppleSystemUIFont';")
+            lbl.setStyleSheet(f"color: {accent_color}; font-size: 11px; font-weight: bold; border: none; background: transparent;")
             tel_layout.addWidget(lbl)
             
-        # --- MENSAGENS ---
+        # --- MENSAGENS (CONTAINER PRINCIPAL) ---
         self.container = QFrame()
-        self.container.setStyleSheet(f"background-color: rgba(10, 10, 15, 200); border: 2px solid {accent_color}; border-radius: 20px;")
+        self.container.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(10, 10, 15, 230); 
+                border: 2px solid {accent_color}; 
+                border-radius: 20px;
+            }}
+        """)
         inner_layout = QHBoxLayout(self.container)
         self.indicator = QFrame()
         self.indicator.setFixedSize(12, 12)
-        self.indicator.setStyleSheet(f"background-color: {accent_color}; border-radius: 6px;")
+        self.indicator.setStyleSheet(f"background-color: {accent_color}; border-radius: 6px; border: none;")
         self.label = QLabel("Sistemas Online")
-        self.label.setStyleSheet(f"color: {text_color}; font-size: 14px; font-weight: 500; font-family: '.AppleSystemUIFont';")
+        self.label.setStyleSheet(f"color: {text_color}; font-size: 14px; font-weight: bold; border: none; background: transparent;")
+        
         inner_layout.addWidget(self.indicator)
         inner_layout.addWidget(self.label)
         inner_layout.setContentsMargins(15, 5, 20, 5)
         
-        self.main_layout.addWidget(self.telemetry_frame)
-        self.main_layout.addWidget(self.container)
-        
         # --- CONTEXTO ---
         self.context_frame = QFrame()
-        self.context_frame.setStyleSheet("background-color: rgba(10, 10, 15, 180); border: 1px solid #af52de55; border-radius: 10px;")
+        self.context_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(10, 10, 15, 230); 
+                border: 1px solid #af52de88; 
+                border-radius: 10px;
+            }
+        """)
         ctx_layout = QVBoxLayout(self.context_frame)
         self.file_label = QLabel("FILE: --")
         self.linear_label = QLabel("LIN: --")
         self.github_label = QLabel("GIT: --")
         for lbl in [self.file_label, self.linear_label, self.github_label]:
-            lbl.setStyleSheet("color: #af52de; font-size: 9px; font-weight: bold; font-family: '.AppleSystemUIFont';")
+            lbl.setStyleSheet("color: #af52de; font-size: 10px; font-weight: bold; border: none; background: transparent;")
             ctx_layout.addWidget(lbl)
-        self.main_layout.addWidget(self.context_frame)
-        self.context_frame.hide()
         
+        # Adiciona ao layout principal
+        self.main_layout.addWidget(self.telemetry_frame)
+        self.main_layout.addWidget(self.container)
+        self.main_layout.addWidget(self.context_frame)
+        
+        self.context_frame.hide()
         self.hide()
         QTimer.singleShot(200, self.apply_vibrancy)
 
@@ -163,9 +200,9 @@ class HUDOverlay(QWidget):
         self.bat_label.setText(f"BAT: {usage['battery']['percent']}%")
         
         if usage['cpu'] > 80:
-            self.cpu_label.setStyleSheet("color: #ff3b30; font-size: 10px; font-weight: 800;")
+            self.cpu_label.setStyleSheet("color: #ff3b30; font-size: 11px; font-weight: 800; border: none; background: transparent;")
         else:
-            self.cpu_label.setStyleSheet("color: #00d4ff; font-size: 10px; font-weight: 800;")
+            self.cpu_label.setStyleSheet(f"color: #00d4ff; font-size: 11px; font-weight: 800; border: none; background: transparent;")
 
     def update_hud(self, text, state="IDLE", duration=3000):
         self.label.setText(text)
@@ -174,12 +211,15 @@ class HUDOverlay(QWidget):
             "PROACTIVE": "#4cd964", "SUCCESS": "#34c759", "CODING": "#af52de"
         }
         color = colors.get(state, "#00d4ff")
-        self.indicator.setStyleSheet(f"background-color: {color}; border-radius: 7px;")
+        self.indicator.setStyleSheet(f"background-color: {color}; border-radius: 6px; border: none;")
         
+        # Força o background opaco o suficiente para aparecer sobre o blur
         self.container.setStyleSheet(f"""
-            background-color: rgba(25, 25, 30, 210); 
-            border: 2px solid {color}aa; 
-            border-radius: 22px;
+            QFrame {{
+                background-color: rgba(20, 20, 25, 240); 
+                border: 2px solid {color}; 
+                border-radius: 20px;
+            }}
         """)
         
         self.adjustSize()

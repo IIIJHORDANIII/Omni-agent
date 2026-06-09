@@ -27,14 +27,15 @@ class LLMClient:
 
     def get_system_prompt(self):
         ctx = ContextService.get_context_str()
-        return f"""Você é o OMNISCIENT, assistente pessoal para macOS.
+        return f"""Você é o OMNISCIENT (estilo JARVIS), assistente pessoal do JHORDAN PASTORELLO.
 
-PROTOCOLO DE RESPOSTA (OBRIGATÓRIO):
-1. <think> Sua análise interna (qualquer idioma). </think>
-2. RESPOSTA FINAL: Apenas Português (Brasil).
-3. AÇÕES: Se precisar usar uma ferramenta, você PODE falar uma frase curta em PT-BR e DEVE incluir o JSON: [{{"tool": "nome", "params": {{...}} }}].
-4. PROIBIDO: Explicar quem você é ou usar meta-conversa (ex: "Entendido, vou fazer...").
-5. Se for apenas conversa, seja direto e amigável.
+REGRAS CRÍTICAS:
+1. IDIOMA: Responda SEMPRE em Português (Brasil) natural e elegante.
+2. BREVIDADE: Seja extremamente direto. Para listas (e-mails, commits), diga APENAS os títulos.
+3. SEM META-CONVERSA: Nunca diga "Entendi", "Vou verificar" ou "Como posso ajudar". Responda diretamente.
+4. IDENTIDADE: Você é o OMNISCIENT. O usuário é o JHORDAN.
+5. REGISTRO: Se o usuário disser "Este sou eu" ou "Grave meu rosto", use a ferramenta register_user.
+6. FERRAMENTAS: Use o JSON [{{"tool": "nome", "params": {{...}} }}] para agir.
 
 LISTA DE FERRAMENTAS DISPONÍVEIS:
 - open_app(app): Abre um app no Mac.
@@ -50,6 +51,7 @@ LISTA DE FERRAMENTAS DISPONÍVEIS:
 - list_files(path): Lista arquivos de um diretório.
 - read_file(path): Lê o conteúdo de um arquivo.
 - analyze_screen(): Descreve o que está na tela agora.
+- register_user(): Registra o perfil visual do Jhordan via câmera.
 - get_calendar_events(): Eventos do calendário de hoje.
 - get_reminders(): Lembretes pendentes.
 - add_reminder(title): Adiciona lembrete.
@@ -77,8 +79,10 @@ LISTA DE FERRAMENTAS DISPONÍVEIS:
 - media_to_mp3(input, output): Converte arquivo de mídia para MP3.
 - create_tool(requirement): Protocolo Gênesis (Cria ferramenta do zero).
 
-CONTEXTO DO MAC:
+DADOS DO MAC:
 {ctx}
+
+ALIASED: PPRD = repositório weboptionwp/app-payjota.
 """
 
     def _clean_response(self, text, is_translation_pass=False):
@@ -139,6 +143,12 @@ CONTEXTO DO MAC:
                 is_english = clean_answer.startswith("__NEED_TRANSLATION__") or (len(clean_answer) > 40 and not any(c in clean_answer for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ"))
                 
                 if is_english:
+                    # Filtro extra: se contiver palavras muito comuns em português que não tem acento, ignora a tradução
+                    pt_common = ["tudo", "certo", "aqui", "parado", "esperando", "comando", "bora", "estou", "agora", "falar"]
+                    if any(word in clean_answer.lower() for word in pt_common):
+                        is_english = False
+                    
+                if is_english:
                     original_text = clean_answer.replace("__NEED_TRANSLATION__", "")
                     print(f"DEBUG: Texto em Inglês detectado. Traduzindo...")
                     translation_prompt = f"Traduza este texto para PORTUGUÊS (BRASIL). Responda APENAS a tradução direta, sem comentários: {original_text}"
@@ -149,14 +159,22 @@ CONTEXTO DO MAC:
                 print(f"DEBUG: JSON detectado. Executando...")
                 tool_result = ToolDispatcher.dispatch(clean_answer)
                 
-                # 2. Segunda Passada (Síntese) - Aqui usamos o histórico também
-                synthesis_messages = full_messages.copy()
-                synthesis_messages.append({"role": "assistant", "content": clean_answer})
-                synthesis_messages.append({"role": "user", "content": f"Resultado das ferramentas: {tool_result}. Agora responda ao usuário de forma natural e amigável em Português (Brasil). NÃO responda com JSON nem com blocos de código ou raciocínio."})
+                # 2. Segunda Passada (Síntese) - Muito mais simples
+                synthesis_messages = [
+                    {"role": "system", "content": "Você é o OMNISCIENT. Responda apenas com os fatos obtidos de forma amigável e MUITO curta em Português (Brasil)."},
+                    {"role": "user", "content": f"O resultado da ferramenta foi: {tool_result}. Responda ao Jhordan agora."}
+                ]
                 
                 final_response_raw = self.manager.generate_command(synthesis_messages)
                 final_response = self._clean_response(final_response_raw)
                 
+                # Fallback: Se a resposta da síntese for muito curta ou parecer um erro, mas a primeira resposta tinha texto útil
+                if len(final_response) < 5 and not has_json:
+                     # Se houver texto amigável na primeira resposta antes do JSON, podemos tentar extraí-lo
+                     first_text = answer.split('[')[0].strip()
+                     if len(first_text) > 10:
+                         final_response = first_text
+
                 # MECANISMO DE TRADUÇÃO PARA SÍNTESE
                 is_synth_english = final_response.startswith("__NEED_TRANSLATION__") or (len(final_response) > 40 and not any(c in final_response for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ"))
                 
