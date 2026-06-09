@@ -91,13 +91,11 @@ class VoiceService:
             time.sleep(5)
 
     def _audio_collector(self):
-        """Coleta áudio do microfone continuamente."""
+        """Coleta áudio do microfone continuamente (mesmo falando, para barge-in)."""
         while self.running:
             try:
                 data = self.stream.read(self.CHUNK, exception_on_overflow=False)
-                if self.is_speaking:
-                    self.last_audio_time = time.time()
-                    continue
+                # Removemos a restrição de self.is_speaking para permitir barge-in
                 
                 audio_np = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
                 energy = np.sqrt(np.mean(audio_np**2))
@@ -144,10 +142,6 @@ class VoiceService:
         self._ensure_stream()
         
         while self.running:
-            if self.is_speaking:
-                time.sleep(0.5)
-                continue
-
             if time.time() - last_process_time > 1.2:
                 audio_data = None
                 with self.audio_lock:
@@ -176,16 +170,23 @@ class VoiceService:
                                         continue
 
                                     if len(text) > 2 and "legendas" not in text:
-                                        keywords = ["jarvis", "agente", "computador", "omni", "omniscient"]
+                                        # Variações fonéticas de "Omni" no Whisper em PT-BR
+                                        keywords = ["omni", "omini", "homni", "ômine", "homeni", "homine", "amni", "omne", "ominy", "omyni"]
                                         words_in_text = re.sub(r'[^\w\s]', '', text).split()
 
                                         if any(kw in words_in_text for kw in keywords):
                                             print(f"WAKE WORD DETECTADA: [{text}]")
-                                            self.speak("Sim?")
+                                            
+                                            # BARGE-IN: Se estava falando, cala a boca imediatamente
+                                            if self.is_speaking:
+                                                self.stop_speaking()
+                                            
+                                            # Não falamos "Sim?". Apenas emitimos o sinal de que ouvimos.
                                             if self.on_wake_word_detected:
                                                 self.on_wake_word_detected()
-                                            with self.audio_lock:
-                                                self.wake_word_window = []
+                                                
+                                            # NÃO limpamos o wake_word_window aqui. Deixamos ele vazar 
+                                            # para o `listen()` para que o comando comece do início.
                                             time.sleep(2.0)
 
                         except Exception as e:
@@ -194,20 +195,8 @@ class VoiceService:
                 last_process_time = time.time()
             time.sleep(0.1)
 
-    def listen(self):
-        """Escuta um comando completo."""
-        start_wait = time.time()
-        while self.is_speaking and time.time() - start_wait < 2.0:
-            time.sleep(0.01)
-
-        with self.audio_lock:
-            while not self.audio_buffer.empty():
-                try:
-                    self.audio_buffer.get_nowait()
-                except:
-                    break
-            self.wake_word_window = []
-
+    def listen(self, continuous_mode=False):
+        """Escuta um comando completo. Se continuous_mode=True, escuta imediatamente sem pre-buffer."""
         print("Ouvindo comando...")
         start_time = time.time()
         recorded_audio = []
@@ -216,7 +205,20 @@ class VoiceService:
         energy_threshold = 0.010 
         
         silence_pad = [0.0] * int(self.RATE * 0.3)
-        recorded_audio.extend(silence_pad)
+        
+        with self.audio_lock:
+            # Se não estamos em modo contínuo, reaproveitamos o áudio que ativou a wake word
+            # Isso garante que a frase "Omni abre o youtube" não perca o "abre"
+            if not continuous_mode and self.wake_word_window:
+                recorded_audio.extend(self.wake_word_window)
+            
+            # Esvazia a fila atual para a gravação principal
+            while not self.audio_buffer.empty():
+                try:
+                    self.audio_buffer.get_nowait()
+                except:
+                    break
+            self.wake_word_window = []
 
         while time.time() - start_time < max_duration:
             while not self.audio_buffer.empty():
@@ -237,7 +239,10 @@ class VoiceService:
             time.sleep(0.01) 
             
         recorded_audio.extend(silence_pad)
-        if not recorded_audio or len(recorded_audio) < self.RATE * 0.8: return None
+        
+        # Filtro de ruído curto
+        if not recorded_audio or len(recorded_audio) < self.RATE * 0.8: 
+            return None
         
         print("Sintonizando voz...")
         self._ensure_stream()
@@ -253,8 +258,15 @@ class VoiceService:
                 final_text = result["text"].strip()
                 final_text = re.sub(r'[^\w\sÀ-ÿ.,!?]', '', final_text)
                 mx.clear_cache()
+                
+                # Se só capturou a wake word isolada, ignora
+                keywords = ["jarvis", "agente", "computador", "omni", "omniscient"]
+                clean_verify = re.sub(r'[^\w\s]', '', final_text.lower()).strip()
+                if clean_verify in keywords:
+                    return None
+                    
                 if len(final_text) < 2: return None
-                print(f"Comando: {final_text}")
+                print(f"Comando completo: {final_text}")
                 return final_text
         except Exception as e:
             print(f"Erro na transcrição: {e}")
