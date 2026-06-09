@@ -566,6 +566,75 @@ class ExecutionService:
             return f"Erro ao buscar projeto: {e}"
 
     @staticmethod
+    def run_shortcut(name, input_text=""):
+        """Executa um atalho do app Atalhos (Shortcuts) do macOS."""
+        try:
+            cmd = f'shortcuts run "{name}"'
+            if input_text:
+                # Passa entrada para o atalho via stdin se necessário
+                process = subprocess.Popen(cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                stdout, stderr = process.communicate(input=input_text)
+                return {"stdout": stdout, "stderr": stderr}
+            else:
+                return ExecutionService.run_terminal_command(cmd)
+        except Exception as e:
+            return {"error": str(e)}
+
+    @staticmethod
+    def list_shortcuts():
+        """Lista todos os atalhos disponíveis no sistema."""
+        return ExecutionService.run_terminal_command("shortcuts list")
+
+    @staticmethod
+    def set_focus_mode(mode_name="Não Perturbe"):
+        """Tenta ativar um modo de foco via AppleScript."""
+        # Nota: No macOS Ventura+, os modos de foco são mais restritos.
+        # Uma forma comum é via UI Scripting no Control Center.
+        script = f'''
+        tell application "System Events"
+            tell process "ControlCenter"
+                click menu bar item "Focus" of menu bar 1
+                delay 0.5
+                click checkbox "{mode_name}" of group 1 of window "Control Center"
+            end tell
+        end tell
+        '''
+        # Fallback para Atalho se o usuário tiver um atalho de foco criado
+        # ExecutionService.run_shortcut(f"Ativar {mode_name}")
+        return ExecutionService.run_applescript(script)
+
+    @staticmethod
+    def capture_screen(output_path=None):
+        """Captura a tela inteira e salva em um arquivo."""
+        if not output_path:
+            output_path = os.path.expanduser(f"~/Desktop/screenshot_{int(time.time())}.png")
+        try:
+            subprocess.run(["screencapture", "-x", output_path], check=True)
+            return f"Captura de tela salva em: {output_path}"
+        except Exception as e:
+            return f"Erro na captura: {e}"
+
+    @staticmethod
+    def download_file(url, dest_path=None):
+        """Baixa um arquivo ou imagem da internet."""
+        import requests
+        try:
+            filename = url.split("/")[-1].split("?")[0] or "downloaded_file"
+            if not dest_path:
+                dest_path = os.path.expanduser(f"~/Downloads/{filename}")
+            
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            with open(dest_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            return f"Arquivo baixado com sucesso em: {dest_path}"
+        except Exception as e:
+            return f"Falha ao baixar arquivo: {e}"
+
+    @staticmethod
     def run_applescript(script):
         """Executa um AppleScript para automação de UI no macOS."""
         try:

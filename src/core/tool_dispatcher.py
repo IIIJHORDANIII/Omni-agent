@@ -94,12 +94,17 @@ class ToolDispatcher:
                         params.get("action") or params.get("script")
                     )
                 elif tool == "open_url":
-
                     url = params.get("url") or params.get("link") or ""
                     if url:
                         result = ExecutionService.open_url(url)
                     else:
                         result = "Faltou me dizer qual site abrir."
+                elif tool in ["mail_search", "search_emails", "buscar_emails"]:
+                    result = ExecutionService.mail_search(params.get("query") or params.get("termo") or "")
+                elif tool in ["mail_unread", "unread_emails", "emails_nao_lidos"]:
+                    result = ExecutionService.mail_unread(params.get("count", 10))
+                elif tool == "mail_list":
+                    result = ExecutionService.get_latest_emails(params.get("count", 5))
                 elif tool == "describe_screen" or tool == "analyze_screen":
                     # Usa o VisionService real em vez do Swift nativo
                     from core.vision_service import VisionService
@@ -164,12 +169,6 @@ class ToolDispatcher:
                         params.get("body", ""),
                         params.get("recipient", "")
                     )
-                elif tool == "mail_list":
-                    result = ExecutionService.get_latest_emails(params.get("count", 5))
-                elif tool == "mail_unread":
-                    result = ExecutionService.mail_unread(params.get("count", 10))
-                elif tool == "mail_search":
-                    result = ExecutionService.mail_search(params.get("query", ""))
                 elif tool == "notes_search":
                     result = ExecutionService.notes_search(params.get("query", ""))
                 elif tool == "create_note" or tool == "create_new_note":
@@ -193,6 +192,14 @@ class ToolDispatcher:
                     result = github.get_pull_requests(params.get("repo") or params.get("repository", ""))
                 elif tool == "github_pr_details":
                     result = github.get_pr_details(params.get("repo") or params.get("repository", ""), params.get("pr") or params.get("number", 0))
+                elif tool == "github_create_pr":
+                    result = github.create_pull_request(
+                        params.get("repo") or params.get("repository", ""),
+                        params.get("title", "Update from Omni-agent"),
+                        params.get("head"),
+                        params.get("base", "main"),
+                        params.get("body", "")
+                    )
                 elif tool == "github_commits":
                     result = github.get_recent_commits(params.get("repo") or params.get("repository", ""), params.get("count", 5))
                 elif tool == "linear_my_issues":
@@ -209,10 +216,29 @@ class ToolDispatcher:
                     result = ExecutionService.get_reminders()
                 elif tool == "add_reminder":
                     result = ExecutionService.add_reminder(params.get("title") or params.get("name", ""))
-                elif tool in ["move_window", "bring_to_front", "close_app", "click_at", "toggle_mute", "type_text", "press_key", "scroll"]:
+                elif tool == "toggle_mute":
                     # Delegar para Swift (Native Bridge)
                     swift_command = {"action": tool, **params}
                     result = ExecutionService.send_command_to_swift(swift_command)
+                elif tool == "run_shortcut":
+                    result = ExecutionService.run_shortcut(params.get("name"), params.get("input", ""))
+                elif tool == "list_shortcuts":
+                    result = ExecutionService.list_shortcuts()
+                elif tool == "set_focus":
+                    result = ExecutionService.set_focus_mode(params.get("mode", "Não Perturbe"))
+                elif tool == "screenshot":
+                    result = ExecutionService.capture_screen(params.get("path"))
+                elif tool == "download_file":
+                    result = ExecutionService.download_file(params.get("url"), params.get("path"))
+                elif tool == "media_cut":
+                    from core.media_editor import MediaEditor
+                    result = MediaEditor.cut_video(params.get("input"), params.get("start"), params.get("duration"), params.get("output"))
+                elif tool == "media_to_mp3":
+                    from core.media_editor import MediaEditor
+                    result = MediaEditor.convert_to_mp3(params.get("input"), params.get("output"))
+                elif tool == "generate_image":
+                    from core.image_generator import ImageGenerator
+                    result = ImageGenerator.generate_image(params.get("prompt"), params.get("output"))
                 else:
                     if hasattr(ExecutionService, tool):
                         method = getattr(ExecutionService, tool)

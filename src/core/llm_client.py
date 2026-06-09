@@ -27,87 +27,84 @@ class LLMClient:
 
     def get_system_prompt(self):
         ctx = ContextService.get_context_str()
-        return f"""Você é o OMNISCIENT, assistente autônomo total para macOS com RACIOCÍNIO DeepSeek-R1.
+        return f"""Você é o OMNISCIENT, assistente pessoal para macOS.
 
-REGRAS DE OURO (SÃO PROTOCOLOS DE SEGURANÇA):
-1. PENSE internamente antes de agir dentro de <think>...</think>.
-2. RESPOSTA FINAL DEVE SER 100% EM PORTUGUÊS (BRASIL).
-3. QUALQUER PALAVRA EM INGLÊS FORA DO <think> É UMA FALHA DE PROTOCOLO.
-4. Se pedirem algo da INTERNET, use `web_read` ou `web_search`.
-5. Se pedirem algo do MAC, use `project_summary` ou `list_files`.
-6. Responda em JSON para ações: [{{"tool": "nome", "params": {{...}} }}].
-7. Se for apenas conversa, responda de forma curta em PT-BR.
+PROTOCOLO DE RESPOSTA (OBRIGATÓRIO):
+1. <think> Sua análise interna (qualquer idioma). </think>
+2. RESPOSTA FINAL: Apenas Português (Brasil).
+3. AÇÕES: Se precisar usar uma ferramenta, você PODE falar uma frase curta em PT-BR e DEVE incluir o JSON: [{{"tool": "nome", "params": {{...}} }}].
+4. PROIBIDO: Explicar quem você é ou usar meta-conversa (ex: "Entendido, vou fazer...").
+5. Se for apenas conversa, seja direto e amigável.
+
+LISTA DE FERRAMENTAS DISPONÍVEIS:
+- open_app(app): Abre um app no Mac.
+- open_url(url): Abre um site ou link.
+- control_app(app, action): UI Scripting (ex: click menu "File").
+- web_search(query): Busca na web e resume.
+- web_read(url): Lê o conteúdo de uma página web.
+- mail_unread(count): E-mails não lidos de hoje.
+- mail_search(query): Busca e-mails por assunto/remetente.
+- mail_draft(subject, body, recipient): Cria rascunho de e-mail.
+- notes_search(query): Busca nas Notas do macOS.
+- create_note(title, content): Cria nota ou arquivo de texto (.txt).
+- list_files(path): Lista arquivos de um diretório.
+- read_file(path): Lê o conteúdo de um arquivo.
+- analyze_screen(): Descreve o que está na tela agora.
+- get_calendar_events(): Eventos do calendário de hoje.
+- get_reminders(): Lembretes pendentes.
+- add_reminder(title): Adiciona lembrete.
+- set_volume(level): Ajusta volume do sistema (0-100).
+- run_shell(command): Executa comando no terminal macOS.
+- run_python(code): Executa código Python em sandbox.
+- run_tests(path): Roda testes (pytest, npm, cargo).
+- github_commits(repo): Commits recentes de um repo.
+- github_list_prs(repo): Lista Pull Requests abertos.
+- github_create_pr(repo, title, head, base, body): Cria um PR no GitHub.
+- linear_my_issues(): Suas tarefas pendentes no Linear.
+- linear_cycle: Resumo do ciclo atual do Linear.
+- project_summary(path): Resumo técnico do projeto (Git + Logs).
+- manage_music(app, action): Controla Spotify/Music (play, pause, next).
+- get_system_info(): Status de bateria e disco.
+- move_window(app, x, y, w, h): Move janela via Swift.
+- toggle_mute(): Alterna mudo do microfone.
+- run_shortcut(name, input): Executa um Atalho do macOS.
+- list_shortcuts(): Lista todos os seus Atalhos salvos.
+- set_focus(mode): Ativa um Modo de Foco (ex: "Não Perturbe", "Trabalho").
+- screenshot(path): Tira um print da tela inteira.
+- download_file(url, path): Baixa um arquivo ou imagem da internet.
+- generate_image(prompt, output): Gera uma imagem via Stable Diffusion local.
+- media_cut(input, start, duration, output): Corta vídeo/áudio via FFmpeg (start: "00:00:10").
+- media_to_mp3(input, output): Converte arquivo de mídia para MP3.
+- create_tool(requirement): Protocolo Gênesis (Cria ferramenta do zero).
+
+CONTEXTO DO MAC:
+{ctx}
 """
 
     def _clean_response(self, text, is_translation_pass=False):
         if not text: return ""
         
         # 1. Limpeza agressiva de tags de pensamento
-        clean_text = text.replace('</think>', ' </think> ').strip() # Garante espaço para split se necessário
+        clean_text = text.replace('</think>', ' </think> ').strip()
         
         if "<think>" in clean_text:
             if "</think>" in clean_text:
                 parts = clean_text.split("</think>")
                 clean_text = parts[-1].strip()
             else:
-                # Tag aberta mas não fechada
+                # Se não fechou, tenta pegar o que vem depois do início do pensamento ou o primeiro JSON
                 start_idx = clean_text.find("<think>")
                 json_start = clean_text.find("[", start_idx)
-                if json_start == -1: json_start = clean_text.find("{", start_idx)
-                
                 if json_start != -1:
                     clean_text = clean_text[json_start:]
                 else:
-                    lines = [l.strip() for l in clean_text[start_idx+7:].split("\n") if l.strip()]
-                    for line in reversed(lines):
-                        if any(c in line for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ"):
-                            return line
-                    return ""
-        elif "</think>" in clean_text:
-            # Caso raro: Modelo gera apenas a tag de fechamento ou começa por ela
-            clean_text = clean_text.split("</think>")[-1].strip()
+                    clean_text = clean_text[start_idx+7:].strip()
         
-        clean_text = clean_text.strip()
-        if not clean_text: return ""
-
-        # 2. Detecção de Idioma e Meta-Talk
-        # Verificamos se há acentos típicos de PT-BR
-        has_pt_accents = any(c in clean_text for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ")
-        
-        # Palavras em inglês que frequentemente vazam em respostas "Portu-glish"
-        english_leaks = ["developed", "below", "company", "application", "interact", "command", "task", "features"]
-        has_english_leak = any(word in clean_text.lower() for word in english_leaks)
-        
-        english_meta_triggers = (
-            "okay", "i will", "the user", "i should", "first", "second", "i'll", "i'm", 
-            "here is", "sure", "i found", "i see", "let me", "i can", "of course", 
-            "based on", "to answer", "i need to", "i will now", "the request"
-        )
-        
-        lower_text = clean_text.lower()
-        starts_with_meta = any(lower_text.startswith(t) for t in english_meta_triggers)
-
-        # Se não é um passe de tradução e não tem acentos em um texto longo, ou começa com meta-talk, ou tem vazamento
-        if not is_translation_pass:
-            # Caso A: JSON detectado (prioridade máxima)
-            json_match = re.search(r'[\[\{].*tool.*[\]\}]', clean_text, re.DOTALL)
-            if json_match:
-                return clean_text[json_match.start():].strip()
-
-            # Caso B: Texto com problemas de idioma
-            if (len(clean_text) > 40 and not has_pt_accents) or starts_with_meta or (has_pt_accents and has_english_leak):
-                # Tenta extrair frases que pareçam PT puro (acentuadas e sem leaks)
-                sentences = re.split(r'(?<=[.!?])\s+', clean_text)
-                pt_sentences = []
-                for s in sentences:
-                    if any(c in s for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ") and not any(w in s.lower() for w in english_leaks):
-                        pt_sentences.append(s.strip())
-                
-                if pt_sentences and not starts_with_meta:
-                    return " ".join(pt_sentences)
-                
-                # Se o texto está muito "sujo", sinaliza necessidade de tradução total
-                return f"__NEED_TRANSLATION__{clean_text}"
+        # 2. Extração de JSON se presente (Prioridade máxima)
+        json_match = re.search(r'[\[\{].*tool.*[\]\}]', clean_text, re.DOTALL)
+        if json_match and not is_translation_pass:
+            # Retorna apenas o JSON para o Dispatcher
+            return clean_text[json_match.start():json_match.end()].strip()
 
         return clean_text.strip()
 
@@ -133,19 +130,21 @@ REGRAS DE OURO (SÃO PROTOCOLOS DE SEGURANÇA):
             answer = self.manager.generate_command(full_messages)
             
             clean_answer = self._clean_response(answer)
-            
-            # MECANISMO DE TRADUÇÃO PARA RESPOSTA DIRETA
-            is_english = clean_answer.startswith("__NEED_TRANSLATION__") or (len(clean_answer) > 40 and not any(c in clean_answer for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ"))
-            
-            if is_english:
-                 original_text = clean_answer.replace("__NEED_TRANSLATION__", "")
-                 print(f"DEBUG: Texto em Inglês detectado. Traduzindo...")
-                 translation_prompt = f"Traduza este texto para PORTUGUÊS (BRASIL). Responda APENAS a tradução direta, sem comentários: {original_text}"
-                 translated = self.manager.generate_command(translation_prompt, system_context="SISTEMA_DE_TRADUCAO_PURAMENTE_EM_PORTUGUES_SEM_META_TALK")
-                 clean_answer = self._clean_response(translated, is_translation_pass=True)
 
+            # Se for um JSON de ferramenta, pulamos a verificação de tradução e vamos direto pro dispatch
             has_json = "{" in clean_answer and ("tool" in clean_answer or "action" in clean_answer)
             
+            if not has_json:
+                # MECANISMO DE TRADUÇÃO PARA RESPOSTA DIRETA
+                is_english = clean_answer.startswith("__NEED_TRANSLATION__") or (len(clean_answer) > 40 and not any(c in clean_answer for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ"))
+                
+                if is_english:
+                    original_text = clean_answer.replace("__NEED_TRANSLATION__", "")
+                    print(f"DEBUG: Texto em Inglês detectado. Traduzindo...")
+                    translation_prompt = f"Traduza este texto para PORTUGUÊS (BRASIL). Responda APENAS a tradução direta, sem comentários: {original_text}"
+                    translated = self.manager.generate_command(translation_prompt, system_context="SISTEMA_DE_TRADUCAO_PURAMENTE_EM_PORTUGUES_SEM_META_TALK")
+                    clean_answer = self._clean_response(translated, is_translation_pass=True)
+
             if has_json:
                 print(f"DEBUG: JSON detectado. Executando...")
                 tool_result = ToolDispatcher.dispatch(clean_answer)
@@ -153,7 +152,7 @@ REGRAS DE OURO (SÃO PROTOCOLOS DE SEGURANÇA):
                 # 2. Segunda Passada (Síntese) - Aqui usamos o histórico também
                 synthesis_messages = full_messages.copy()
                 synthesis_messages.append({"role": "assistant", "content": clean_answer})
-                synthesis_messages.append({"role": "user", "content": f"Resultado das ferramentas: {tool_result}. Agora responda ao usuário de forma natural em PT-BR."})
+                synthesis_messages.append({"role": "user", "content": f"Resultado das ferramentas: {tool_result}. Agora responda ao usuário de forma natural e amigável em Português (Brasil). NÃO responda com JSON nem com blocos de código ou raciocínio."})
                 
                 final_response_raw = self.manager.generate_command(synthesis_messages)
                 final_response = self._clean_response(final_response_raw)
@@ -174,5 +173,5 @@ REGRAS DE OURO (SÃO PROTOCOLOS DE SEGURANÇA):
             
             return clean_answer.strip()
         except Exception as e:
-            print(f"ERRO MLX: {e}")
-            return f"Erro na execução local via MLX. Verifique os logs do sistema."
+            print(f"ERRO LLM: {e}")
+            return f"Erro na execução da LLM. Verifique os logs do sistema."

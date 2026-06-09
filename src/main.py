@@ -42,6 +42,7 @@ from core.execution_service import ExecutionService
 from core.terminal_server import TerminalOverwatchServer
 from core.recall_service import RecallService
 from core.night_watch import NightWatch
+from core.auto_organizer import AutoOrganizerService
 from ui.ghost_popup import GhostPopup
 
 class OmniscientAgent(QApplication):
@@ -90,6 +91,10 @@ class OmniscientAgent(QApplication):
         # Forge: Asset Manager
         self.asset_manager = AssetManagerService()
         self.asset_manager.start()
+        
+        # Auto-Organizer: Monitora e organiza downloads via IA
+        self.organizer = AutoOrganizerService(self.chat_window.llm_client)
+        self.organizer.start()
         
         # Overwatch: Log Watcher & Ghost Programmer
         self.log_watcher = LogWatcherService(
@@ -247,20 +252,55 @@ Seja extremamente breve (máximo 1 frase).
         # Mostra HUD indicando que está ouvindo
         self.hud.display_signal.emit("Ouvindo...", "LISTENING", 0)
         
-        # Escuta o comando do usuário
+        # Escuta o comando do usuário (usando o buffer contínuo)
         text = self.chat_window.voice_service.listen()
         
-        # Esconde indicador de voz após ouvir
-        self.hud.voice_signal.emit("LISTENING", False)
-        
         if text and len(text.strip()) > 1:
-            self.hud.display_signal.emit("Processando...", "THINKING", 0)
-            print(f"Comando de voz: {text}")
-            self.chat_window.process_silent_command(text)
-            self.hud.display_signal.emit("Pronto.", "SUCCESS", 2000)
+            # Processa o comando inicial
+            self._handle_command_cycle(text)
         else:
             self.hud.display_signal.emit("...", "IDLE", 1)
-            print("Nenhum comando capturado.")
+            self.hud.voice_signal.emit("LISTENING", False)
+            print("Nenhum comando capturado após wake word.")
+
+    def _handle_command_cycle(self, text):
+        """Processa um comando e abre a janela de conversa contínua."""
+        self.hud.display_signal.emit("Processando...", "THINKING", 0)
+        self.hud.voice_signal.emit("LISTENING", False)
+        
+        print(f"Comando de voz: {text}")
+        
+        # Como process_silent_command é assíncrono (thread separada no chat_window),
+        # precisamos aguardar ele terminar para reabrir o microfone.
+        # Para simplificar e manter a fluidez, usamos uma abordagem de callback
+        # ou chamamos a lógica de LLM diretamente, mas vamos aguardar o VoiceService terminar de falar.
+        
+        self.chat_window.process_silent_command(text)
+        self.hud.display_signal.emit("Pronto.", "SUCCESS", 2000)
+        
+        # Loop de Conversa Contínua (Follow-up)
+        # Aguarda o agente começar a falar (se for o caso)
+        time.sleep(1) 
+        
+        # Aguarda ele terminar de falar
+        while self.chat_window.voice_service.is_speaking:
+            time.sleep(0.1)
+            
+        print("Abrindo janela de Conversa Contínua (Follow-up)...")
+        self.hud.display_signal.emit("Ouvindo... (Contínuo)", "LISTENING", 0)
+        self.hud.voice_signal.emit("LISTENING", True)
+        
+        # Escuta em modo contínuo (sem pre-buffer da wake word)
+        follow_up_text = self.chat_window.voice_service.listen(continuous_mode=True)
+        
+        if follow_up_text and len(follow_up_text.strip()) > 1:
+            # Se o usuário falou algo, entra no loop novamente
+            self._handle_command_cycle(follow_up_text)
+        else:
+            # Se ficou em silêncio, encerra o ciclo e volta a dormir
+            self.hud.display_signal.emit("Hibernando.", "IDLE", 2000)
+            self.hud.voice_signal.emit("LISTENING", False)
+            print("Fim do ciclo de voz. Aguardando wake word.")
 
     def setup_tray(self):
         # Tenta carregar o ícone, se não existir usa um padrão do sistema

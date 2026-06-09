@@ -70,3 +70,13 @@ class GithubService:
             return "Atividade Recente no GitHub:\n" + "\n".join(list(set(pull_requests))[:5])
         except Exception as e:
             return f"Erro ao buscar atividade do GitHub: {e}"
+
+    def create_pull_request(self, repo_name, title, head, base="main", body=""):
+        """Cria um Pull Request em um repositório."""
+        if not self.client: return "GitHub Token não configurado."
+        try:
+            repo = self.client.get_repo(repo_name)
+            pr = repo.create_pull(title=title, body=body, head=head, base=base)
+            return f"Pull Request criado com sucesso: {pr.html_url}"
+        except Exception as e:
+            return f"Erro ao criar Pull Request: {e}"
