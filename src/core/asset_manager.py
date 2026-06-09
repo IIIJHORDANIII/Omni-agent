@@ -8,7 +8,7 @@ from core.execution_service import ExecutionService
 class AssetHandler(FileSystemEventHandler):
     def __init__(self, target_project_path=None):
         self.target_project_path = target_project_path or os.getcwd()
-        self.extensions = ('.png', '.jpg', '.jpeg')
+        self.extensions = ('.png', '.jpg', '.jpeg', '.webp')
 
     def on_created(self, event):
         if not event.is_directory and event.src_path.lower().endswith(self.extensions):
@@ -40,7 +40,7 @@ class AssetHandler(FileSystemEventHandler):
             # 2. Otimiza e Converte para WebP
             print(f"JARVIS Forge: Otimizando asset {filename}...")
             with Image.open(file_path) as img:
-                img.save(dest_path, "WEBP", quality=80)
+                img.save(dest_path, "webp", quality=80)
             
             print(f"JARVIS Forge: Asset salvo em {dest_path}")
             # Opcional: Remover o original (comentado por segurança)

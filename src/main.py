@@ -42,6 +42,7 @@ from core.execution_service import ExecutionService
 from core.terminal_server import TerminalOverwatchServer
 from core.recall_service import RecallService
 from core.night_watch import NightWatch
+from core.auto_organizer import AutoOrganizerService
 from ui.ghost_popup import GhostPopup
 
 class OmniscientAgent(QApplication):
@@ -90,6 +91,10 @@ class OmniscientAgent(QApplication):
         # Forge: Asset Manager
         self.asset_manager = AssetManagerService()
         self.asset_manager.start()
+        
+        # Auto-Organizer: Monitora e organiza downloads via IA
+        self.organizer = AutoOrganizerService(self.chat_window.llm_client)
+        self.organizer.start()
         
         # Overwatch: Log Watcher & Ghost Programmer
         self.log_watcher = LogWatcherService(
