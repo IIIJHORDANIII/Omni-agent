@@ -58,14 +58,22 @@ class AssetManagerService:
         ]
         self.observer = Observer()
 
-    def start(self):
+    def start(self, observer=None):
         handler = AssetHandler()
+        if observer:
+            self.observer = observer
+            is_external = True
+        else:
+            self.observer = Observer()
+            is_external = False
+
         for path in self.watch_paths:
             if os.path.exists(path):
                 self.observer.schedule(handler, path, recursive=False)
                 print(f"Forge: Monitorando assets em {path}")
         
-        self.observer.start()
+        if not is_external:
+            self.observer.start()
 
     def stop(self):
         self.observer.stop()

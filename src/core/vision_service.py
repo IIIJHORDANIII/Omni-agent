@@ -39,20 +39,16 @@ class VisionService:
 
     def _ensure_model_loaded(self):
         """Carrega o modelo de visão apenas quando necessário."""
-        if self.model is None:
-            import gc
-            gc.collect()
-            try:
-                mx.clear_cache()
-            except: pass
-            
-            print(f"Carregando {self.model_id} (Olhos do Agente)...")
-            try:
-                # Carrega o modelo de visão multimodal
-                self.model, self.processor = load(self.model_id)
-                print("Visão Real ativada (Qwen2-VL).")
-            except Exception as e:
-                print(f"Erro ao carregar modelo de visão: {e}")
+        from core.model_arbiter import arbiter
+        if arbiter.request_model("VISION"):
+            if self.model is None:
+                print(f"Carregando {self.model_id} (Olhos do Agente)...")
+                try:
+                    # Carrega o modelo de visão multimodal
+                    self.model, self.processor = load(self.model_id)
+                    print("Visão Real ativada (Qwen2-VL).")
+                except Exception as e:
+                    print(f"Erro ao carregar modelo de visão: {e}")
 
     @property
     def sct(self):

@@ -21,9 +21,12 @@ class VoiceIndicator(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | 
             Qt.WindowType.WindowStaysOnTopHint | 
-            Qt.WindowType.Tool
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowDoesNotAcceptFocus |
+            Qt.WindowType.WindowTransparentForInput
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setFixedSize(100, 100)
         
         layout = QVBoxLayout(self)
@@ -70,6 +73,11 @@ class HUDOverlay(QWidget):
         print(f"DEBUG: HUD init - HAS_NATIVE_BLUR: {HAS_NATIVE_BLUR}")
         self.is_dark = True 
         
+        # Timer para esconder o HUD com segurança
+        self.hide_timer = QTimer()
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.hide)
+        
         # Voice Indicator Popup
         self.voice_indicator = VoiceIndicator()
         
@@ -91,89 +99,82 @@ class HUDOverlay(QWidget):
             self.voice_indicator.hide()
 
     def apply_vibrancy(self):
-        """Aplica o efeito de vidro/blur nativo do macOS."""
-        if not HAS_NATIVE_BLUR: return
-
-        try:
-            view_id = self.winId()
-            native_view = objc.objc_object(c_void_p=int(view_id))
-            window = native_view.window()
-            if window:
-                window.setOpaque_(False)
-                window.setBackgroundColor_(objc.lookUpClass('NSColor').clearColor())
-                # Força o conteúdo a aparecer sobre o blur
-                window.setHasShadow_(True)
-
-            effect_view = NSVisualEffectView.alloc().init()
-            effect_view.setFrame_(((0, 0), (self.width(), self.height())))
-            effect_view.setMaterial_(2) # Dark
-            effect_view.setState_(1)
-            effect_view.setBlendingMode_(0)
-            effect_view.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
-            native_view.addSubview_positioned_relativeTo_(effect_view, -1, None)
-        except Exception as e:
-            print(f"Erro ao aplicar efeito de vidro: {e}")
+        """Desativado temporariamente para corrigir bug do quadrado preto/blur."""
+        return
 
     def init_ui(self):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | 
             Qt.WindowType.WindowStaysOnTopHint | 
-            Qt.WindowType.Tool
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowDoesNotAcceptFocus |
+            Qt.WindowType.WindowTransparentForInput
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         
         # Cores JARVIS
         text_color = "white"
         accent_color = "#00d4ff"
         
         self.main_layout = QHBoxLayout(self)
-        self.main_layout.setContentsMargins(15, 10, 15, 10)
-        self.main_layout.setSpacing(20)
+        self.main_layout.setContentsMargins(20, 10, 20, 10)
+        self.main_layout.setSpacing(15)
         
-        # --- TELEMETRIA ---
+        # --- TELEMETRIA (ESTILO CYBERPUNK) ---
         self.telemetry_frame = QFrame()
+        self.telemetry_frame.setFixedWidth(130)
         self.telemetry_frame.setStyleSheet(f"""
             QFrame {{
-                background-color: rgba(10, 10, 15, 230); 
-                border: 1px solid {accent_color}88; 
-                border-radius: 10px;
+                background-color: rgba(10, 10, 25, 220); 
+                border-left: 3px solid {accent_color}; 
+                border-radius: 4px;
             }}
         """)
         tel_layout = QVBoxLayout(self.telemetry_frame)
-        self.cpu_label = QLabel("CPU: --%")
-        self.ram_label = QLabel("RAM: --%")
-        self.bat_label = QLabel("BAT: --%")
+        tel_layout.setContentsMargins(10, 5, 10, 5)
+        tel_layout.setSpacing(1)
+        
+        self.cpu_label = QLabel("CPU --%")
+        self.ram_label = QLabel("RAM --%")
+        self.bat_label = QLabel("BAT --%")
         for lbl in [self.cpu_label, self.ram_label, self.bat_label]:
-            lbl.setStyleSheet(f"color: {accent_color}; font-size: 11px; font-weight: bold; border: none; background: transparent;")
+            lbl.setStyleSheet(f"color: {accent_color}; font-size: 10px; font-family: 'Menlo'; font-weight: bold; background: transparent;")
             tel_layout.addWidget(lbl)
             
-        # --- MENSAGENS (CONTAINER PRINCIPAL) ---
+        # --- MENSAGENS (CONTAINER PRINCIPAL - ESTILO VIDRO) ---
         self.container = QFrame()
+        self.container.setObjectName("MainContainer")
         self.container.setStyleSheet(f"""
-            QFrame {{
-                background-color: rgba(10, 10, 15, 230); 
-                border: 2px solid {accent_color}; 
-                border-radius: 20px;
+            QFrame#MainContainer {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(25, 25, 45, 240), stop:1 rgba(10, 10, 20, 255));
+                border: 1px solid rgba(0, 212, 255, 120);
+                border-radius: 12px;
+                min-width: 380px;
             }}
         """)
         inner_layout = QHBoxLayout(self.container)
+        inner_layout.setContentsMargins(20, 10, 25, 10)
+        
+        # Indicador de Status (Círculo Neon)
         self.indicator = QFrame()
-        self.indicator.setFixedSize(12, 12)
-        self.indicator.setStyleSheet(f"background-color: {accent_color}; border-radius: 6px; border: none;")
-        self.label = QLabel("Sistemas Online")
-        self.label.setStyleSheet(f"color: {text_color}; font-size: 14px; font-weight: bold; border: none; background: transparent;")
+        self.indicator.setFixedSize(10, 10)
+        self.indicator.setStyleSheet(f"background-color: {accent_color}; border-radius: 5px; border: 1px solid white;")
+        
+        self.label = QLabel("OMNISCIENT OPERACIONAL")
+        self.label.setStyleSheet(f"color: {text_color}; font-size: 13px; font-family: 'Avenir Next'; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;")
         
         inner_layout.addWidget(self.indicator)
+        inner_layout.addSpacing(10)
         inner_layout.addWidget(self.label)
-        inner_layout.setContentsMargins(15, 5, 20, 5)
         
-        # --- CONTEXTO ---
+        # --- CONTEXTO (PAINEL ROXO) ---
         self.context_frame = QFrame()
         self.context_frame.setStyleSheet("""
             QFrame {
-                background-color: rgba(10, 10, 15, 230); 
-                border: 1px solid #af52de88; 
-                border-radius: 10px;
+                background-color: rgba(175, 82, 222, 50); 
+                border: 1px solid rgba(175, 82, 222, 120); 
+                border-radius: 8px;
             }
         """)
         ctx_layout = QVBoxLayout(self.context_frame)
@@ -205,27 +206,34 @@ class HUDOverlay(QWidget):
             self.cpu_label.setStyleSheet(f"color: #00d4ff; font-size: 11px; font-weight: 800; border: none; background: transparent;")
 
     def update_hud(self, text, state="IDLE", duration=3000):
-        self.label.setText(text)
+        self.hide_timer.stop() # Cancela qualquer fechamento pendente
+        
+        self.label.setText(text.upper())
         colors = {
             "IDLE": "#00d4ff", "LISTENING": "#ff3b30", "THINKING": "#ffcc00",
             "PROACTIVE": "#4cd964", "SUCCESS": "#34c759", "CODING": "#af52de"
         }
         color = colors.get(state, "#00d4ff")
-        self.indicator.setStyleSheet(f"background-color: {color}; border-radius: 6px; border: none;")
         
-        # Força o background opaco o suficiente para aparecer sobre o blur
+        # Atualiza o brilho neon do indicador e a borda do container
+        self.indicator.setStyleSheet(f"background-color: {color}; border-radius: 5px; border: 1px solid white;")
+        
         self.container.setStyleSheet(f"""
-            QFrame {{
-                background-color: rgba(20, 20, 25, 240); 
-                border: 2px solid {color}; 
-                border-radius: 20px;
+            QFrame#MainContainer {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(25, 25, 45, 240), stop:1 rgba(10, 10, 20, 255));
+                border: 2px solid {color}88;
+                border-radius: 12px;
+                min-width: 380px;
             }}
         """)
         
         self.adjustSize()
         self.recenter()
         self.show()
-        if duration > 0: QTimer.singleShot(duration, self.hide)
+        self.raise_()
+        
+        if duration > 0:
+            self.hide_timer.start(duration)
 
     def update_context_wall(self, data):
         """Atualiza o painel de contexto lateral."""

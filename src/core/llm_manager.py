@@ -39,16 +39,12 @@ class LLMManager:
         if self.provider != "LOCAL" and self.provider != "MLX":
             return
 
-        if self.model is None:
-            import gc
-            gc.collect()
-            try:
-                mx.clear_cache()
-            except: pass
-
-            print(f"Carregando {self.model_path} no Metal...")
-            self.model, self.tokenizer = load(self.model_path)
-            print("Cérebro DeepSeek-R1 pronto (Local).")
+        from core.model_arbiter import arbiter
+        if arbiter.request_model("LLM"):
+            if self.model is None:
+                print(f"Carregando {self.model_path} no Metal...")
+                self.model, self.tokenizer = load(self.model_path)
+                print("Cérebro DeepSeek-R1 pronto (Local).")
 
     def _ensure_stream(self):
         """Garante que a thread atual tenha o stream default da GPU bound."""
@@ -102,36 +98,63 @@ class LLMManager:
             print(f"ERRO DEEPSEEK CLOUD: {e}")
             return f"Erro ao acessar DeepSeek Cloud: {e}"
 
-    def _generate_mlx(self, messages, system_context=""):
-        """Gera resposta usando MLX local."""
+    def generate_streaming(self, prompt_or_messages, system_context=""):
+        """Gera resposta em modo streaming para maior agilidade."""
+        if isinstance(prompt_or_messages, list):
+            messages = prompt_or_messages
+        else:
+            messages = [{"role": "user", "content": prompt_or_messages}]
+
+        if self.provider == "DEEPSEEK":
+            yield from self._stream_deepseek(messages)
+        else:
+            yield from self._stream_mlx(messages)
+
+    def _stream_deepseek(self, messages):
+        """Streaming da API do DeepSeek."""
+        try:
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+            payload = {
+                "model": "deepseek-chat",
+                "messages": messages,
+                "stream": True
+            }
+            with httpx.stream("POST", f"{self.base_url}/chat/completions", headers=headers, json=payload, timeout=60.0) as response:
+                buffer = ""
+                for line in response.iter_lines():
+                    if line.startswith("data: "):
+                        content = line[6:]
+                        if content == "[DONE]": break
+                        try:
+                            chunk = json.loads(content)
+                            delta = chunk["choices"][0]["delta"].get("content", "")
+                            if delta:
+                                buffer += delta
+                                if any(c in delta for c in ".!?\n"):
+                                    yield buffer.strip()
+                                    buffer = ""
+                        except: continue
+                if buffer: yield buffer.strip()
+        except Exception as e:
+            yield f"Erro no stream cloud: {e}"
+
+    def _stream_mlx(self, messages):
+        """Streaming local via MLX."""
         self._ensure_stream()
         with self._lock:
             try:
-                with mx.stream(mx.default_stream(mx.gpu)):
-                    self._ensure_model_loaded()
-                    
-                    if hasattr(self.tokenizer, "apply_chat_template"):
-                        full_prompt = self.tokenizer.apply_chat_template(
-                            messages, tokenize=False, add_generation_prompt=True
-                        )
-                    else:
-                        full_prompt = ""
-                        for msg in messages:
-                            role = msg['role']
-                            content = msg['content']
-                            full_prompt += f"<|im_start|>{role}\n{content}<|im_end|>\n"
-                        full_prompt += "<|im_start|>assistant\n"
-
-                    response = generate(self.model, self.tokenizer, prompt=full_prompt, max_tokens=600, verbose=False)
-                    print(f"DEBUG MLX: Resposta RAW: {response[:100]}...")
-                    
-                    if response is None:
-                        return "Não consegui processar seu pedido agora."
-                        
-                    return self._post_process(response.strip(), messages, system_context)
+                self._ensure_model_loaded()
+                full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                
+                # Usamos a função nativa de geração com streaming se disponível ou simulamos
+                # Para simplificar agora, vamos gerar blocos de texto
+                response = generate(self.model, self.tokenizer, prompt=full_prompt, max_tokens=600)
+                # Simula streaming por sentenças para manter a compatibilidade da interface
+                sentences = re.split(r'(?<=[.!?])\s+', response)
+                for s in sentences:
+                    yield s.strip()
             except Exception as e:
-                print(f"ERRO MLX: {e}")
-                return f"Erro na geração local: {e}"
+                yield f"Erro no stream local: {e}"
 
     def _post_process(self, response, original_messages, system_context=""):
         """Limpeza e filtros comuns a todos os providers."""
@@ -159,8 +182,13 @@ class LLMManager:
             return response
 
         has_pt_accents = any(c in response for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ")
+        
+        # Palavras comuns em PT-BR que não tem acento (para evitar falso positivo de Inglês)
+        pt_no_accents = ["boa", "noite", "bom", "dia", "tudo", "bem", "fazer", "pode", "estou", "aqui", "agora", "ordem", "precisa", "sempre"]
+        has_pt_words = any(word in response.lower() for word in pt_no_accents)
+        
         english_cot_triggers = ["okay,", "let me", "i will", "the user", "i should", "first,"]
-        is_probably_english = (len(response) > 40 and not has_pt_accents) or \
+        is_probably_english = (len(response) > 40 and not has_pt_accents and not has_pt_words) or \
                              any(response.lower().startswith(t) for t in english_cot_triggers)
         
         if is_probably_english and system_context != "TRANSLATION_TASK":

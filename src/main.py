@@ -27,6 +27,7 @@ def resource_path(relative_path):
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtCore import QTimer
+from core.registry import registry
 from ui.chat_window import ChatWindow
 from ui.hud import HUDOverlay
 from utils.hotkeys import GlobalHotkeyHandler
@@ -44,12 +45,22 @@ from core.recall_service import RecallService
 from core.night_watch import NightWatch
 from core.auto_organizer import AutoOrganizerService
 from core.sentinela_service import SentinelService
+from core.background_agents import BackgroundAgentService
+from core.crawler_service import ProjectCrawlerService
 from ui.ghost_popup import GhostPopup
 
-class OmniscientAgent(QApplication):
+class MainApp(QApplication):
+    _instance = None
+
+    @staticmethod
+    def instance():
+        return MainApp._instance
+
     def __init__(self, argv):
         super().__init__(argv)
+        MainApp._instance = self
         self.setQuitOnLastWindowClosed(False)
+
         
         # Hardware Setup: Ajusta Microfone Interno (85% evita distorção/clipping)
         print("Sintonizando hardware de áudio...")
@@ -60,10 +71,19 @@ class OmniscientAgent(QApplication):
         self._ensure_swift_agent()
         
         # UI Components
+        from ui.permission_gate import PermissionGate
         self.hud = HUDOverlay()
         self.chat_window = ChatWindow()
         self.ghost_popup = GhostPopup()
         self.ghost_popup.applied.connect(self._apply_ghost_fix)
+        self.permission_gate = PermissionGate()
+        
+        # Registro de Serviços no Registry
+        registry.register("hud", self.hud)
+        registry.register("chat", self.chat_window)
+        registry.register("voice", self.chat_window.voice_service)
+        registry.register("llm", self.chat_window.llm_client)
+        registry.register("permission_gate", self.permission_gate)
         
         # Referência compartilhada do VisionService (evita múltiplos carregamentos)
         shared_vision = self.chat_window.llm_client.vision_service
@@ -89,13 +109,26 @@ class OmniscientAgent(QApplication):
         # Sound Service
         self.sound = SoundService()
         
-        # Forge: Asset Manager
+        # Central Watchdog Observer (Evita conflitos de FSEvents no macOS)
+        from watchdog.observers import Observer
+        self.file_observer = Observer()
+
+        # Forge: Asset Manager (Otimização de imagens)
         self.asset_manager = AssetManagerService()
-        self.asset_manager.start()
-        
         # Auto-Organizer: Monitora e organiza downloads via IA
         self.organizer = AutoOrganizerService(self.chat_window.llm_client)
-        self.organizer.start()
+        # Background Agents: Linting, Dependency Scout, Commit Guard
+        self.bg_agents = BackgroundAgentService(self)
+        
+        # Project DNA Crawler: Mapeia exaustivamente os projetos do Jhordan
+        self.crawler = ProjectCrawlerService(self.chat_window.llm_client.manager)
+        self.crawler.start_background_crawl()
+
+        # Inicia serviços usando o observer central
+        self.asset_manager.start(observer=self.file_observer)
+        self.organizer.start(observer=self.file_observer)
+        self.bg_agents.start(observer=self.file_observer)
+        self.file_observer.start()
         
         # Overwatch: Log Watcher & Ghost Programmer
         self.log_watcher = LogWatcherService(
@@ -112,6 +145,15 @@ class OmniscientAgent(QApplication):
         )
         self.ghost_programmer.fix_suggested.connect(self.ghost_popup.show_suggestion)
         self.ghost_programmer.start()
+        
+        # Novas Proatividades 3.0
+        from core.delta_vision import DeltaVisionService
+        from core.time_guard import TimeGuardService
+        self.delta_vision = DeltaVisionService(self.chat_window.voice_service, self.hud)
+        self.delta_vision.start()
+        
+        self.time_guard = TimeGuardService(self.chat_window.voice_service, self.chat_window.llm_client)
+        self.time_guard.start()
         
         # Briefing Service
         self.briefing = BriefingService(self.chat_window.llm_client.manager)
@@ -132,9 +174,10 @@ class OmniscientAgent(QApplication):
         self.monitor.vision = shared_vision # Injeta a instância única
         self.monitor.start()
         
-        # Hotkey Handler (Cmd+Shift+O)
+        # Hotkey Handler
         self.hotkey_handler = GlobalHotkeyHandler()
-        self.hotkey_handler.hotkey_pressed.connect(self.chat_window.show_and_activate)
+        self.hotkey_handler.chat_requested.connect(self.chat_window.show_and_activate)
+        self.hotkey_handler.voice_requested.connect(self.on_voice_requested)
         self.hotkey_handler.start()
         
         # Tray Icon Setup
@@ -143,10 +186,8 @@ class OmniscientAgent(QApplication):
         # Configura callback de status de voz para o HUD
         self.chat_window.voice_service.status_callback = lambda state, visible: self.hud.voice_signal.emit(state, visible)
         
-        # Inicia a Wake Word (Ouvindo por "Desk" ou "Omini")
-        self.chat_window.voice_service.start_wake_word_detection(
-            self.on_wake_word
-        )
+        # Inicia o modo de escuta (Threads de áudio e coleta), mas sem o loop de Wake Word
+        self.chat_window.voice_service.start_listening_mode()
         
         # Sequência de inicialização (Saudação imediata)
         self.sound.play_system_sound("Hero")
@@ -158,21 +199,37 @@ class OmniscientAgent(QApplication):
         print("Omniscient Agent iniciado e pronto!")
 
     def _run_startup_briefing(self):
-        """Gera e fala o briefing matinal com reconhecimento visual."""
+        """Gera um briefing proativo baseado em contexto real (Calendário, E-mail, Memória)."""
+        print("Preparando briefing proativo...")
+        time.sleep(4) # Aguarda sistemas estabilizarem
+        
         try:
-            import mlx.core as mx
-            # Garante inicialização do MLX na thread via context manager
-            with mx.stream(mx.gpu):
-                # Tenta reconhecer o Jhordan visualmente
-                is_jhordan = self.chat_window.llm_client.vision_service.recognize_user()
-                
-                if is_jhordan:
-                    self.chat_window.voice_service.speak("Identidade confirmada. Bem-vindo de volta, Jhordan.")
-                
-                briefing_text = self.briefing.generate_morning_briefing()
+            # 1. Coleta contexto real
+            cal_events = ExecutionService.get_calendar_events()
+            unread_mails = ExecutionService.mail_unread(count=3)
+            system_info = ExecutionService.get_system_info()
+            
+            prompt = f"""Gere um briefing de saudação curto e elegante para o JHORDAN.
+            CONTEXTO REAL:
+            - Calendário: {cal_events}
+            - E-mails não lidos: {unread_mails}
+            - Sistema: {system_info}
+            
+            REGRAS:
+            - Seja muito breve (máximo 3 frases).
+            - Não diga "bom dia" se for noite (veja a hora do sistema).
+            - Mencione algo relevante do calendário ou e-mail se houver.
+            - Termine com o status da bateria.
+            """
+            
+            # Gera o briefing usando o cliente de chat para ter o tom do Omniscient
+            briefing_text = self.chat_window.llm_client.chat([{"role": "user", "content": prompt}])
+            
+            if briefing_text and "Erro" not in briefing_text:
+                self.hud.display_signal.emit("Briefing Matinal", "PROACTIVE", 5000)
                 self.chat_window.voice_service.speak(briefing_text)
         except Exception as e:
-            print(f"Erro no briefing: {e}")
+            print(f"Erro ao gerar briefing proativo: {e}")
 
     def _update_context_wall(self):
         """Monitora o arquivo ativo e atualiza o HUD."""
@@ -186,13 +243,20 @@ class OmniscientAgent(QApplication):
             print(f"Erro ao atualizar context wall: {e}")
 
     def _on_terminal_error(self, payload):
-        """Chamado quando um comando no terminal falha."""
+        """Chamado quando um comando no terminal falha. Agora aprende com o erro."""
         command = payload.get("command", "")
         exit_code = payload.get("exit_code", "")
+        output = payload.get("output", "")
+        
+        # 1. Verifica se já aprendemos sobre isso
+        from core.error_learning import error_learner
+        prior_knowledge = error_learner.check_for_prior_errors(command)
         
         prompt = f"""Você é o JARVIS. O usuário executou um comando que FALHOU no terminal.
 COMANDO: {command}
 CÓDIGO DE SAÍDA: {exit_code}
+OUTPUT: {output}
+{f'CONHECIMENTO PRÉVIO: {prior_knowledge}' if prior_knowledge else ''}
 
 SUA TAREFA:
 Explique rapidamente por que falhou e sugira o comando correto para consertar.
@@ -202,6 +266,10 @@ Seja extremamente breve (máximo 1 frase).
             suggestion = self.chat_window.llm_client.manager.generate_command(prompt, system_context="TERMINAL_OVERWATCH")
             self.hud.display_signal.emit(f"FALHA NO TERMINAL: {suggestion}", "PROACTIVE", 7000)
             self.chat_window.voice_service.speak(f"Senhor, o comando {command.split()[0]} falhou. {suggestion}")
+            
+            # 2. Salva o novo conhecimento
+            error_learner.learn_from_error(command, output or f"Exit code {exit_code}", suggestion)
+            
         except Exception as e:
             print(f"Erro ao processar erro do terminal: {e}")
 
@@ -255,31 +323,56 @@ Seja extremamente breve (máximo 1 frase).
         self.hud.display_signal.emit(f"SENTINELA: {message}", "PROACTIVE", 5000)
         self.chat_window.append_to_history(message, "system")
 
-    def on_wake_word(self):
-        """Chamado quando detecta uma palavra de ativação."""
-        self.chat_window.voice_service.stop_speaking() # Interrompe o JARVIS para ouvir o usuário
-        self.sound.wake()
-        # Som 'PAM' e indicador visual de gravação
-        self.sound.play_voice_start()
-        self.hud.voice_signal.emit("LISTENING", True)
+    def on_voice_requested(self):
+        """Chamado via atalho Cmd+Shift+Enter. Alterna entre ouvir uma vez ou modo contínuo."""
+        # Se o agente estiver falando, apenas interrompe o áudio
+        if self.chat_window.voice_service.is_speaking:
+            print("Atalho de voz acionado. Interrompendo fala...")
+            self.chat_window.voice_service.stop_speaking()
+            return
+
+        # Alterna o estado do modo contínuo
+        is_active = self.chat_window.voice_service.toggle_continuous_mode()
         
-        threading.Thread(target=self._acquire_and_process_command, daemon=True).start()
+        if is_active:
+            self.hud.display_signal.emit("MODO CONTÍNUO: ATIVADO", "LISTENING", 3000)
+            self.sound.wake()
+            self.sound.play_voice_start()
+            
+            # Só inicia a thread se ela já não estiver rodando
+            if not getattr(self, "_voice_cycle_active", False):
+                threading.Thread(target=self._acquire_and_process_command, daemon=True).start()
+        else:
+            self.hud.display_signal.emit("MODO CONTÍNUO: DESATIVADO", "IDLE", 3000)
+            self.chat_window.voice_service.abort_listen = True
+            self.sound.play_system_sound("Tink")
 
     def _acquire_and_process_command(self):
-        # Mostra HUD indicando que está ouvindo
-        self.hud.display_signal.emit("Ouvindo...", "LISTENING", 0)
-        
-        # Escuta o comando do usuário (usando o buffer contínuo)
-        text = self.chat_window.voice_service.listen()
-        
-        if text and len(text.strip()) > 1:
-            # ENTRA NO CICLO DE COMANDO (Não chamamos process_silent_command aqui
-            # pois o _handle_command_cycle já vai lidar com isso e abrir o loop contínuo)
-            self._handle_command_cycle(text)
-        else:
-            self.hud.display_signal.emit("...", "IDLE", 1)
+        """Loop principal de escuta. Mantém-se ativo enquanto o modo contínuo estiver ON."""
+        self._voice_cycle_active = True
+        try:
+            while self.chat_window.voice_service.is_continuous_mode:
+                # Se o agente começou a falar no meio do loop, espera ele terminar
+                while self.chat_window.voice_service.is_speaking:
+                    time.sleep(0.1)
+
+                self.hud.voice_signal.emit("LISTENING", True)
+                
+                # Escuta o próximo comando (usando modo contínuo para evitar pre-buffer do wake word)
+                text = self.chat_window.voice_service.listen(continuous_mode=True)
+                
+                if text and len(text.strip()) > 1:
+                    # Processa o comando e gera a resposta (que dispara o speak)
+                    self._handle_command_cycle(text)
+                    # Dá um pequeno respiro para o processamento terminar e o speak começar
+                    time.sleep(0.8)
+                else:
+                    # Se não houve áudio, apenas aguarda um pouco para não fritar a CPU
+                    time.sleep(0.2)
+                    
+        finally:
+            self._voice_cycle_active = False
             self.hud.voice_signal.emit("LISTENING", False)
-            print("Nenhum comando capturado após wake word.")
 
     def _handle_command_cycle(self, text):
         """Processa um comando e abre a janela de conversa contínua."""
@@ -288,18 +381,22 @@ Seja extremamente breve (máximo 1 frase).
         
         print(f"Comando de voz: {text}")
         
-        # Como process_silent_command é assíncrono (thread separada no chat_window),
-        # precisamos aguardar ele terminar para reabrir o microfone.
-        # Para simplificar e manter a fluidez, usamos uma abordagem de callback
-        # ou chamamos a lógica de LLM diretamente, mas vamos aguardar o VoiceService terminar de falar.
-        
+        # Se o usuário disse algo que indica que ele quer que o agente pare, 
+        # processamos o comando (para o LLM saber que parou) mas NÃO abrimos o loop contínuo.
+        stop_words = ["chega", "para", "parar", "silêncio", "tchau", "obrigado", "valeu", "encerrar", "quieto"]
+        is_stop_request = any(word in text.lower() for word in stop_words)
+
         self.chat_window.process_silent_command(text)
         self.hud.display_signal.emit("Pronto.", "SUCCESS", 2000)
         
+        if is_stop_request:
+            print("Comando de parada detectado. Encerrando ciclo.")
+            return
+
         # Loop de Conversa Contínua (Follow-up)
         # 1. Aguarda o processamento da LLM (que pode demorar)
         while getattr(self.chat_window, 'is_processing', False):
-            time.sleep(0.5)
+            time.sleep(0.1)
             
         # 2. Agora aguarda o agente terminar de falar
         while self.chat_window.voice_service.is_speaking:
@@ -347,5 +444,5 @@ Seja extremamente breve (máximo 1 frase).
         self.tray_icon.show()
 
 if __name__ == "__main__":
-    app = OmniscientAgent(sys.argv)
+    app = MainApp(sys.argv)
     sys.exit(app.exec())

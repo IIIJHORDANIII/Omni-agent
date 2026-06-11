@@ -1,13 +1,17 @@
 import os
 import threading
-import soundfile as sf
-import subprocess
-import tempfile
+import numpy as np
+import sounddevice as sd
 import time
 import re
+from queue import Queue
 from kokoro_onnx import Kokoro
 
 class KokoroService:
+    """
+    Serviço de Voz Realista usando Kokoro ONNX.
+    Otimizado para Apple Silicon com streaming via fila thread-safe.
+    """
     _instance = None
     _lock = threading.Lock()
 
@@ -19,94 +23,138 @@ class KokoroService:
             return cls._instance
 
     def __init__(self, model_path=None, voices_path=None):
-        if self._initialized:
-            return
+        if self._initialized: return
             
-        # Default paths
-        base_path = "/Users/pastorello/Documents/pessoal/agent/src/models/kokoro"
+        # Caminhos dos modelos
+        base_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models/kokoro")
         self.model_path = model_path or os.path.join(base_path, "kokoro-v1.0.onnx")
         self.voices_path = voices_path or os.path.join(base_path, "voices.bin")
         
-        self.is_speaking = False
-        self.current_playback_process = None
+        self._is_speaking = False
+        self._abort_playback = False
         self.status_callback = None
+        self.playback_queue = Queue()
+        self.running = True
         
         try:
-            print(f"Iniciando Kokoro TTS com modelo: {self.model_path}")
-            if not os.path.exists(self.model_path) or not os.path.exists(self.voices_path):
-                print(f"AVISO: Arquivos do Kokoro não encontrados. Use o script de download.")
-                self.kokoro = None
-            else:
+            if os.path.exists(self.model_path) and os.path.exists(self.voices_path):
                 self.kokoro = Kokoro(self.model_path, self.voices_path)
-                print("Kokoro TTS carregado com sucesso (Offline).")
+                print("🧠 Kokoro TTS: Motor de voz ultra-realista ONLINE.")
+                # Inicia a thread de processamento de áudio
+                threading.Thread(target=self._playback_worker, daemon=True).start()
+            else:
+                print(f"⚠️ Kokoro TTS: Arquivos não encontrados em {base_path}. Fallback ativo.")
+                self.kokoro = None
         except Exception as e:
-            print(f"Erro ao carregar Kokoro: {e}")
+            print(f"❌ Erro ao carregar Kokoro: {e}")
             self.kokoro = None
             
         self._initialized = True
 
+    @property
+    def is_speaking(self):
+        return self._is_speaking or not self.playback_queue.empty()
+
+    @is_speaking.setter
+    def is_speaking(self, value):
+        self._is_speaking = value
+
     def stop_speaking(self):
-        """Interrompe a fala atual."""
-        if self.current_playback_process:
+        """Interrompe a reprodução de áudio e limpa a fila imediatamente."""
+        self._abort_playback = True
+        # Limpa a fila
+        while not self.playback_queue.empty():
             try:
-                self.current_playback_process.terminate()
+                self.playback_queue.get_nowait()
             except:
-                pass
-            self.current_playback_process = None
+                break
+        
+        try:
+            sd.stop()
+        except:
+            pass
+        self._is_speaking = False
 
-    def speak(self, text, voice="pm_alex", speed=1.0, lang="pt-br"):
-        """Fala o texto usando Kokoro ONNX (Offline) em Português."""
-        if not text or not self.kokoro:
-            if not self.kokoro:
-                print("Kokoro não inicializado. Não é possível falar.")
-            return
-
-        self.stop_speaking()
-
-        def _speak():
+    def _playback_worker(self):
+        """Thread que consome a fila de áudio e reproduz sequencialmente."""
+        while self.running:
             try:
-                # Limpa o texto para uma fala natural
-                clean_text = re.sub(r'\[.*?\]', '', text) 
-                clean_text = re.sub(r'[*#_`]', '', clean_text)
-                clean_text = clean_text.strip()
-                if not clean_text: return
+                # Use timeout para permitir que a thread verifique self.running
+                try:
+                    item = self.playback_queue.get(timeout=1.0)
+                except:
+                    continue
 
-                self.is_speaking = True
+                if item is None: 
+                    self.playback_queue.task_done()
+                    break # Sentinel para parar a thread
+                
+                samples, sample_rate = item
+                self._is_speaking = True
                 if self.status_callback: self.status_callback("SPEAKING", True)
+                
+                self._abort_playback = False
+                try:
+                    sd.play(samples, sample_rate)
+                    
+                    # Aguarda o término ou aborto
+                    while True:
+                        if self._abort_playback:
+                            sd.stop()
+                            break
+                        
+                        # Verifica se ainda está tocando
+                        # sounddevice.get_stream() retorna o stream ativo
+                        try:
+                            st = sd.get_stream()
+                            if st is None or not st.active:
+                                break
+                        except:
+                            break
+                        
+                        time.sleep(0.05)
+                except Exception as play_error:
+                    print(f"⚠️ Erro ao iniciar playback: {play_error}")
+                
+                self.playback_queue.task_done()
 
-                # Gera o áudio via Kokoro em Português
-                print(f"Kokoro: Gerando áudio (PT-BR) para: {clean_text[:30]}...")
+            except Exception as e:
+                print(f"⚠️ Erro no worker de voz: {e}")
+            finally:
+                if self.playback_queue.empty():
+                    self._is_speaking = False
+                    if self.status_callback: self.status_callback("SPEAKING", False)
+
+    def __del__(self):
+        self.running = False
+        self.playback_queue.put(None)
+
+    def speak(self, text, voice="af_bella", speed=1.1, lang="pt-br"):
+        """Adiciona texto à fila para processamento e fala."""
+        if not text or not self.kokoro: return
+
+        # Limpeza de texto para fala natural
+        clean_text = re.sub(r'[*#_`~]', '', text)
+        clean_text = re.sub(r'\[.*?\]', '', clean_text)
+        clean_text = clean_text.replace("UI", "interface").strip()
+        
+        if not clean_text or len(clean_text) < 2: return
+
+        def _generate_and_enqueue():
+            try:
+                # Geração de Samples (Nativo Kokoro ONNX)
                 samples, sample_rate = self.kokoro.create(
                     clean_text, 
                     voice=voice, 
                     speed=speed, 
                     lang=lang
                 )
-
-                # Salva em arquivo temporário para reprodução
-                tmp_dir = os.path.expanduser("~/Library/Caches/OmniscientAgent")
-                os.makedirs(tmp_dir, exist_ok=True)
-                tmp_path = os.path.join(tmp_dir, f"kokoro_{int(time.time())}.wav")
-
-                sf.write(tmp_path, samples, sample_rate)
-
-                if os.path.exists(tmp_path):
-                    # Usa afplay para reprodução assíncrona fácil no macOS
-                    self.current_playback_process = subprocess.Popen(["afplay", tmp_path])
-                    self.current_playback_process.wait()
-                    self.current_playback_process = None
-                    try:
-                        os.remove(tmp_path)
-                    except:
-                        pass
-
+                self.playback_queue.put((samples, sample_rate))
             except Exception as e:
-                print(f"Erro no Kokoro TTS: {e}")
-            finally:
-                self.is_speaking = False
-                if self.status_callback: self.status_callback("SPEAKING", False)
+                print(f"⚠️ Erro ao gerar áudio Kokoro: {e}")
 
-        threading.Thread(target=_speak, daemon=True).start()
+        # A geração do áudio ainda pode ser em thread para não travar o chamador (LLM stream)
+        threading.Thread(target=_generate_and_enqueue, daemon=True).start()
 
     def get_available_voices(self):
         if self.kokoro:
