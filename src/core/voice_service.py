@@ -65,6 +65,19 @@ class VoiceService:
             self.is_continuous_mode = False # Nova flag para mãos-livres
             self._initialized = True
 
+            # Registro no Arbiter
+            from core.model_arbiter import arbiter
+            arbiter.register_unloader("WHISPER", self.unload_model)
+
+    def unload_model(self):
+        """No MLX Whisper, o modelo é frequentemente carregado sob demanda, 
+        mas aqui limpamos referências se houver."""
+        if hasattr(self, 'whisper_model'):
+            print("VoiceService: Descarregando Whisper da RAM...")
+            # Como mlx_whisper.transcribe aceita o path, 
+            # não mantemos um objeto model pesado persistente.
+            pass
+
     def toggle_continuous_mode(self, enabled=None):
         """Alterna ou define o estado do modo de escuta contínua."""
         if enabled is None:
@@ -369,8 +382,15 @@ class VoiceService:
                     self.is_speaking = True
                     if self.status_callback: self.status_callback("SPEAKING", True)
                     
-                    # Limpeza agressiva para fala fluída
+                    # Limpeza agressiva para fala fluída (Filtro Anti-Pensamento v2)
                     clean_text = re.sub(r'<(think|reasoning)>.*?</\1>', '', text, flags=re.DOTALL | re.IGNORECASE)
+                    # Caso a tag não tenha sido fechada
+                    if "<think>" in clean_text.lower():
+                        clean_text = clean_text.lower().split("<think>")[0]
+                    
+                    # Remove prefixos comuns de raciocínio
+                    clean_text = re.sub(r'^(Pensamento|Raciocínio|Thought|Análise):.*', '', clean_text, flags=re.IGNORECASE | re.MULTILINE)
+                    
                     clean_text = re.sub(r'[*#_`~]', '', clean_text)
                     clean_text = re.sub(r'\[.*?\]', '', clean_text).strip()
                     

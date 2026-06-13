@@ -34,6 +34,16 @@ class LLMManager:
         print(f"Cérebro Raciocinante preparado (Provider: {self.provider}, Model: {self.model_name}).")
         self._initialized = True
 
+        # Registro no Arbiter
+        from core.model_arbiter import arbiter
+        arbiter.register_unloader("LLM", self.unload_model)
+
+    def unload_model(self):
+        if self.model:
+            print(f"LLMManager: Descarregando {self.model_path} da RAM...")
+            self.model = None
+            self.tokenizer = None
+
     def _ensure_model_loaded(self):
         """Carrega o modelo DeepSeek-R1 apenas quando necessário (Local MLX)."""
         if self.provider != "LOCAL" and self.provider != "MLX":

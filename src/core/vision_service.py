@@ -33,6 +33,17 @@ class VisionService:
         print(f"Vision Service pronto para Apple Silicon (Qwen2-VL).")
         self._initialized = True
 
+        # Registro no Arbiter para permitir descarga real da RAM
+        from core.model_arbiter import arbiter
+        arbiter.register_unloader("VISION", self.unload_model)
+
+    def unload_model(self):
+        """Libera o modelo da RAM/VRAM."""
+        if self.model:
+            print(f"VisionService: Descarregando {self.model_id} da RAM...")
+            self.model = None
+            self.processor = None
+
     def _ensure_stream(self):
         """Garante que a thread atual tenha o stream default da GPU bound."""
         mx.set_default_stream(mx.default_stream(mx.gpu))

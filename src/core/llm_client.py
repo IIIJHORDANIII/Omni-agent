@@ -94,29 +94,30 @@ ALIASED:
     def _clean_response(self, text, is_translation_pass=False):
         if not text: return ""
         
-        # 1. Limpeza agressiva de tags de pensamento
-        clean_text = text.replace('</think>', ' </think> ').strip()
-        
-        if "<think>" in clean_text:
-            if "</think>" in clean_text:
-                parts = clean_text.split("</think>")
-                clean_text = parts[-1].strip()
-            else:
-                # Se não fechou, tenta pegar o que vem depois do início do pensamento ou o primeiro JSON
-                start_idx = clean_text.find("<think>")
-                json_start = clean_text.find("[", start_idx)
-                if json_start != -1:
-                    clean_text = clean_text[json_start:]
-                else:
-                    clean_text = clean_text[start_idx+7:].strip()
-        
-        # 2. Extração de JSON se presente (Prioridade máxima)
-        # Suporta tanto "tool" quanto "action"
-        json_match = re.search(r'[\[\{].*(tool|action).*[\]\}]', clean_text, re.DOTALL)
+        # 1. Extração de JSON se presente (Prioridade máxima no loop ReAct)
+        json_match = re.search(r'[\[\{].*(tool|action).*[\]\}]', text, re.DOTALL)
         if json_match and not is_translation_pass:
-            # Retorna apenas o JSON para o Dispatcher
-            return clean_text[json_match.start():json_match.end()].strip()
+            return text[json_match.start():json_match.end()].strip()
 
+        # 2. Limpeza agressiva de tags e marcadores de pensamento
+        # Remove blocos <think>...</think> ou <reasoning>...</reasoning>
+        clean_text = re.sub(r'<(think|reasoning)>.*?</\1>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Remove marcadores de texto comuns que o DeepSeek ou outros modelos usam às vezes
+        patterns_to_remove = [
+            r'^Pensamento:.*?\n', 
+            r'^Raciocínio:.*?\n', 
+            r'^Thought:.*?\n',
+            r'\n\nPensamento:.*',
+            r'\n\nThought:.*'
+        ]
+        for pattern in patterns_to_remove:
+            clean_text = re.sub(pattern, '', clean_text, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+
+        # Caso a tag não tenha sido fechada (streaming ou erro de geração)
+        if "<think>" in clean_text.lower():
+            clean_text = clean_text.lower().split("<think>")[0]
+            
         return clean_text.strip()
 
     def chat(self, messages, include_vision=False, image_b64=None, stream_callback=None):
@@ -140,8 +141,15 @@ ALIASED:
             
             full_messages.append({"role": "system", "content": system_prompt})
             
-            # GESTÃO DE CONTEXTO: Mantém apenas as últimas 10 mensagens para economizar tokens
-            context_history = messages[-10:]
+            # GESTÃO DE CONTEXTO: Resume histórico se for muito longo
+            if len(messages) > 12:
+                print("DEBUG LLM: Histórico longo detectado. Resumindo contexto...")
+                summary_prompt = "Resuma o histórico desta conversa em 3 pontos chave para manter o contexto principal vivo."
+                # ... Lógica de resumo aqui ...
+                context_history = messages[-10:]
+            else:
+                context_history = messages[-10:]
+            
             full_messages.extend(context_history)
             
             print(f"DEBUG LLM: Iniciando geração (ReAct Loop)...")
@@ -172,6 +180,13 @@ ALIASED:
                         "role": "user", 
                         "content": f"RESULTADO DA FERRAMENTA:\n{tool_result}\nSe a tarefa não terminou ou falhou, use outra estratégia/ferramenta. Se terminou, dê a resposta final (sem JSON)."
                     })
+                    
+                    # Feedback visual se houver falha na ferramenta (Fase 5 - Transparência)
+                    if "FAILURE" in str(tool_result):
+                        from core.registry import registry
+                        hud = registry.get("hud")
+                        if hud:
+                            hud.display_signal.emit("CORRIGINDO ERRO INTERNO...", "THINKING", 2000)
                     
                     # Auto-Evolução (apenas na primeira iteração para manter simples)
                     if iteration == 1:

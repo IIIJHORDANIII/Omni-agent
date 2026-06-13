@@ -61,8 +61,14 @@ class MainApp(QApplication):
         MainApp._instance = self
         self.setQuitOnLastWindowClosed(False)
 
+        # 0. Verificação de Setup (Versão PRO)
+        if not os.path.exists(".env"):
+            from ui.setup_wizard import SetupWizard
+            wizard = SetupWizard()
+            if wizard.exec() == SetupWizard.DialogCode.Rejected:
+                sys.exit(0)
         
-        # Hardware Setup: Ajusta Microfone Interno (85% evita distorção/clipping)
+        # Hardware Setup...
         print("Sintonizando hardware de áudio...")
         HardwareManager.set_internal_mic_as_default()
         HardwareManager.set_input_volume(85)
@@ -91,14 +97,12 @@ class MainApp(QApplication):
         # Recall Service (Memória Fotográfica)
         self.recall = RecallService(self.chat_window.llm_client.manager)
         self.recall.vision = shared_vision # Injeta a instância única
-        self.recall.start()
         
         # Night Watch (Patrulha Noturna)
         self.night_watch = NightWatch(self.chat_window.llm_client.manager)
         
         # Terminal Overwatch
         self.terminal_overwatch = TerminalOverwatchServer(callback=self._on_terminal_error)
-        self.terminal_overwatch.start()
         
         # Context Aggregator
         self.context_aggregator = ContextAggregator()
@@ -122,13 +126,11 @@ class MainApp(QApplication):
         
         # Project DNA Crawler: Mapeia exaustivamente os projetos do Jhordan
         self.crawler = ProjectCrawlerService(self.chat_window.llm_client.manager)
-        self.crawler.start_background_crawl()
 
-        # Inicia serviços usando o observer central
+        # Configura observadores (sem iniciar)
         self.asset_manager.start(observer=self.file_observer)
         self.organizer.start(observer=self.file_observer)
         self.bg_agents.start(observer=self.file_observer)
-        self.file_observer.start()
         
         # Overwatch: Log Watcher & Ghost Programmer
         self.log_watcher = LogWatcherService(
@@ -136,7 +138,6 @@ class MainApp(QApplication):
             self.chat_window.voice_service,
             self.hud
         )
-        self.log_watcher.start()
         
         self.ghost_programmer = GhostPairProgrammer(
             self.chat_window.llm_client.manager,
@@ -144,27 +145,21 @@ class MainApp(QApplication):
             self.hud
         )
         self.ghost_programmer.fix_suggested.connect(self.ghost_popup.show_suggestion)
-        self.ghost_programmer.start()
         
         # Novas Proatividades 3.0
         from core.delta_vision import DeltaVisionService
         from core.time_guard import TimeGuardService
         self.delta_vision = DeltaVisionService(self.chat_window.voice_service, self.hud)
-        self.delta_vision.start()
-        
         self.time_guard = TimeGuardService(self.chat_window.voice_service, self.chat_window.llm_client)
-        self.time_guard.start()
         
         # Briefing Service
         self.briefing = BriefingService(self.chat_window.llm_client.manager)
         
         # Sentinela Service (Monitoramento Visual Adaptativo)
         self.sentinela = SentinelService(self.chat_window.voice_service, self.hud)
-        self.sentinela.start()
         
         # Services
         # O Monitor Service analisa a tela periodicamente em busca de eventos importantes
-        # Agora passamos as dependências corretas (LLM, Voz e Memória)
         self.monitor = MonitorService(
             self.chat_window.llm_client, 
             self.voice_service_alias if hasattr(self, 'voice_service_alias') else self.chat_window.voice_service,
@@ -172,13 +167,11 @@ class MainApp(QApplication):
             hud=self.hud
         )
         self.monitor.vision = shared_vision # Injeta a instância única
-        self.monitor.start()
         
-        # Hotkey Handler
+        # Hotkey Handler (Lazy Init)
         self.hotkey_handler = GlobalHotkeyHandler()
         self.hotkey_handler.chat_requested.connect(self.chat_window.show_and_activate)
         self.hotkey_handler.voice_requested.connect(self.on_voice_requested)
-        self.hotkey_handler.start()
         
         # Tray Icon Setup
         self.setup_tray()
@@ -189,14 +182,47 @@ class MainApp(QApplication):
         # Inicia o modo de escuta (Threads de áudio e coleta), mas sem o loop de Wake Word
         self.chat_window.voice_service.start_listening_mode()
         
-        # Sequência de inicialização (Saudação imediata)
+        # Sequência de inicialização (Saudação personalizada)
         self.sound.play_system_sound("Hero")
-        self.chat_window.voice_service.speak("Sistemas online, Senhor. Omniscient carregado.")
+        user_name = os.getenv("USER_NAME", "Senhor")
+        self.chat_window.voice_service.speak(f"Sistemas online, {user_name}. Omniscient carregado.")
+        
+        # ESTABILIDADE PRO: Atraso na carga de serviços pesados para evitar conflito de hardware (SIGTRAP)
+        print("Omniscient: Aguardando estabilização do hardware...")
+        QTimer.singleShot(3000, self._start_delayed_services)
         
         # Briefing opcional no startup (Saudação baseada na hora - roda em background)
         threading.Thread(target=self._run_startup_briefing, daemon=True).start()
         
         print("Omniscient Agent iniciado e pronto!")
+
+    def _start_delayed_services(self):
+        """Inicia serviços que podem causar conflitos de hardware se iniciados em paralelo."""
+        try:
+            print("🚀 Iniciando Protocolos de Alta Fidelidade...")
+            
+            # 1. Hotkeys (O mais sensível no macOS)
+            self.hotkey_handler.start()
+            
+            # 2. Visão e Monitoramento (Acionam o Metal)
+            self.delta_vision.start()
+            self.sentinela.start()
+            self.monitor.start()
+            
+            # 3. Observadores de Arquivo e Logs
+            self.file_observer.start()
+            self.log_watcher.start()
+            self.ghost_programmer.start()
+            self.crawler.start_background_crawl()
+            
+            # 4. Serviços de Background
+            self.night_watch.start()
+            self.auto_organizer.start()
+            self.background_agents.start()
+            
+            print("✅ Todos os sistemas operacionais e seguros.")
+        except Exception as e:
+            print(f"Erro ao iniciar serviços tardios: {e}")
 
     def _run_startup_briefing(self):
         """Gera um briefing proativo baseado em contexto real (Calendário, E-mail, Memória)."""

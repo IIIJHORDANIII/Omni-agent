@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 
 class PermissionGate(QWidget):
     """
@@ -60,6 +60,7 @@ class PermissionGate(QWidget):
         self.setLayout(layout)
         self.hide()
 
+    @pyqtSlot(str)
     def request_permission(self, action_desc):
         self.label.setText(f"<b>Ação Crítica:</b><br>{action_desc}<br><br>Você permite?")
         self.show()

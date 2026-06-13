@@ -1,37 +1,49 @@
 import os
 import time
-import subprocess
+import requests
 
 class ImageGenerator:
     """
-    Gerador de Imagens via Flux (MLX).
-    Requer: pip install mflux
+    Gerador de Imagens Leve (Cloud-based).
+    Gera imagens usando a API do Hugging Face (requer token pré-configurado).
     """
     @staticmethod
+    def preload_model(hud=None):
+        pass
+
+    @staticmethod
     def generate_image(prompt, output_path=None):
-        """Gera uma imagem usando Flux (via mflux) nativo para MLX."""
+        """Gera uma imagem via Hugging Face Inference API."""
         if not output_path:
             output_path = os.path.expanduser(f"~/Desktop/generated_image_{int(time.time())}.png")
         
-        # Usamos o mflux-generate com o modelo 'schnell' (4 steps) e quantização de 4-bit para ser leve
-        # O mflux baixa o modelo automaticamente no primeiro uso.
-        venv_bin = os.path.join(os.getcwd(), "venv", "bin", "mflux-generate")
-        if not os.path.exists(venv_bin):
-            venv_bin = "mflux-generate" # Fallback para o PATH
-            
-        cmd = f"{venv_bin} --model schnell --prompt '{prompt}' --output '{output_path}' --steps 4 --quantize 4"
-        
         try:
-            print(f"🎨 Gerando imagem localmente (Flux Schnell 4-bit): '{prompt}'...")
-            # Aumentamos o timeout para o download do modelo no primeiro uso
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
-            if result.returncode == 0:
-                # Tenta abrir a imagem gerada
+            print(f"🎨 Gerando imagem via Hugging Face API: '{prompt}'...")
+            
+            # Tenta ler o token salvo pelo 'huggingface-cli login'
+            token_path = os.path.expanduser("~/.cache/huggingface/token")
+            if not os.path.exists(token_path):
+                return "Erro: Token do Hugging Face não encontrado. Por favor, faça login com 'huggingface-cli login'."
+                
+            with open(token_path, "r") as f:
+                token = f.read().strip()
+                
+            API_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
+            headers = {"Authorization": f"Bearer {token}"}
+            payload = {"inputs": prompt}
+            
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+            
+            if response.status_code == 200:
+                with open(output_path, 'wb') as f:
+                    f.write(response.content)
+                
+                # Abre a imagem no Mac
+                import subprocess
                 subprocess.run(["open", output_path])
                 return f"Imagem gerada com sucesso e salva em: {output_path}"
             else:
-                return f"Erro ao gerar imagem: {result.stderr}"
-        except subprocess.TimeoutExpired:
-            return "A geração demorou demais (provavelmente baixando o modelo). Tente novamente em instantes."
+                return f"Erro na API do Hugging Face (Status {response.status_code}): {response.text}"
+                
         except Exception as e:
             return f"Falha na geração de imagem: {e}"

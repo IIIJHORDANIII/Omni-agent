@@ -86,11 +86,6 @@ class HUDOverlay(QWidget):
         self.voice_signal.connect(self._handle_voice_indicator)
         
         self.init_ui()
-        
-        # Timer para telemetria
-        self.telemetry_timer = QTimer()
-        self.telemetry_timer.timeout.connect(self.update_telemetry)
-        self.telemetry_timer.start(5000)
 
     def _handle_voice_indicator(self, state, visible):
         if visible:
@@ -121,27 +116,6 @@ class HUDOverlay(QWidget):
         self.main_layout.setContentsMargins(20, 10, 20, 10)
         self.main_layout.setSpacing(15)
         
-        # --- TELEMETRIA (ESTILO CYBERPUNK) ---
-        self.telemetry_frame = QFrame()
-        self.telemetry_frame.setFixedWidth(130)
-        self.telemetry_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: rgba(10, 10, 25, 220); 
-                border-left: 3px solid {accent_color}; 
-                border-radius: 4px;
-            }}
-        """)
-        tel_layout = QVBoxLayout(self.telemetry_frame)
-        tel_layout.setContentsMargins(10, 5, 10, 5)
-        tel_layout.setSpacing(1)
-        
-        self.cpu_label = QLabel("CPU --%")
-        self.ram_label = QLabel("RAM --%")
-        self.bat_label = QLabel("BAT --%")
-        for lbl in [self.cpu_label, self.ram_label, self.bat_label]:
-            lbl.setStyleSheet(f"color: {accent_color}; font-size: 10px; font-family: 'Menlo'; font-weight: bold; background: transparent;")
-            tel_layout.addWidget(lbl)
-            
         # --- MENSAGENS (CONTAINER PRINCIPAL - ESTILO VIDRO) ---
         self.container = QFrame()
         self.container.setObjectName("MainContainer")
@@ -150,7 +124,7 @@ class HUDOverlay(QWidget):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(25, 25, 45, 240), stop:1 rgba(10, 10, 20, 255));
                 border: 1px solid rgba(0, 212, 255, 120);
                 border-radius: 12px;
-                min-width: 380px;
+                min-width: 250px;
             }}
         """)
         inner_layout = QHBoxLayout(self.container)
@@ -186,24 +160,12 @@ class HUDOverlay(QWidget):
             ctx_layout.addWidget(lbl)
         
         # Adiciona ao layout principal
-        self.main_layout.addWidget(self.telemetry_frame)
         self.main_layout.addWidget(self.container)
         self.main_layout.addWidget(self.context_frame)
         
         self.context_frame.hide()
         self.hide()
         QTimer.singleShot(200, self.apply_vibrancy)
-
-    def update_telemetry(self):
-        usage = SystemMonitor.get_resource_usage()
-        self.cpu_label.setText(f"CPU: {usage['cpu']}%")
-        self.ram_label.setText(f"RAM: {usage['memory']}%")
-        self.bat_label.setText(f"BAT: {usage['battery']['percent']}%")
-        
-        if usage['cpu'] > 80:
-            self.cpu_label.setStyleSheet("color: #ff3b30; font-size: 11px; font-weight: 800; border: none; background: transparent;")
-        else:
-            self.cpu_label.setStyleSheet(f"color: #00d4ff; font-size: 11px; font-weight: 800; border: none; background: transparent;")
 
     def update_hud(self, text, state="IDLE", duration=3000):
         self.hide_timer.stop() # Cancela qualquer fechamento pendente
@@ -223,7 +185,7 @@ class HUDOverlay(QWidget):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(25, 25, 45, 240), stop:1 rgba(10, 10, 20, 255));
                 border: 2px solid {color}88;
                 border-radius: 12px;
-                min-width: 380px;
+                min-width: 250px;
             }}
         """)
         
@@ -249,8 +211,8 @@ class HUDOverlay(QWidget):
         self.show()
 
     def recenter(self):
-        screen = self.screen().geometry()
-        self.move((screen.width() - self.width()) // 2, 50)
+        """Posiciona o HUD no canto superior esquerdo para um visual minimalista."""
+        self.move(30, 50)
 
     def show_message(self, text, duration=3000):
         self.update_hud(text, "IDLE", duration)

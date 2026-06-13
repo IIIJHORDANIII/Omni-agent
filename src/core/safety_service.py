@@ -1,5 +1,5 @@
 from core.registry import registry
-from PyQt6.QtCore import QEventLoop
+from PyQt6.QtCore import QEventLoop, QMetaObject, Qt, Q_ARG
 
 class SafetyService:
     """
@@ -41,7 +41,9 @@ class SafetyService:
         if params:
             desc += f"<br><small>{str(params)[:100]}...</small>"
             
-        gate.request_permission(desc)
+        # Chama o UI update na main thread
+        QMetaObject.invokeMethod(gate, "request_permission", Qt.ConnectionType.QueuedConnection, Q_ARG(str, desc))
+        
         loop.exec() # Espera o sinal 'confirmed'
         
         gate.confirmed.disconnect(on_confirmed)
