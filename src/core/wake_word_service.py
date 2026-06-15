@@ -40,7 +40,7 @@ class WakeWordService:
         self.config_file = self.data_dir / "config.json"
         
         self.templates = []  # Lista de arrays numpy (áudios normalizados)
-        self.threshold = 0.35  # Similaridade mínima (0-1)
+        self.threshold = 0.45  # Similaridade mínima (0-1)
         self.min_samples = 3  # Mínimo de amostras para treinar
         
         self._load_templates()

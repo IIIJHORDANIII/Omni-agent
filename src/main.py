@@ -503,27 +503,33 @@ class MainApp(QApplication):
         
         def _process():
             try:
+                # Adicionar mensagem do usuário ao histórico
+                self.chat_window._safe_append_to_history("VOCÊ (Voz)", text)
+                
                 print(f"DEBUG OVERLAY: Chamando LLM com {len(self.chat_window.chat_history)} mensagens...")
                 response = self.chat_window.llm_client.chat(self.chat_window.chat_history)
                 print(f"DEBUG OVERLAY: Resposta do LLM: '{response[:100] if response else 'VAZIA'}'")
                 
-                # Enviar resposta para overlay
                 if response:
                     self._overlay_response(response)
                     
-                    # Falar resposta
                     if not response.startswith("[{"):
+                        print(f"DEBUG OVERLAY: Iniciando TTS...")
                         self.chat_window.voice_service.speak(response)
-                        # Aguardar TTS terminar
+                        print(f"DEBUG OVERLAY: is_speaking={self.chat_window.voice_service.is_speaking}")
                         while self.chat_window.voice_service.is_speaking:
                             time.sleep(0.1)
+                        print(f"DEBUG OVERLAY: TTS finalizado")
+                    else:
+                        print(f"DEBUG OVERLAY: Resposta ignorada para TTS (JSON)")
                 
-                # Esconder overlay após 2 segundos
                 time.sleep(2.0)
                 self._overlay_hide()
                 
             except Exception as e:
                 print(f"DEBUG OVERLAY: ERRO: {e}")
+                import traceback
+                traceback.print_exc()
                 self._overlay_error(f"Erro: {e}")
                 time.sleep(3.0)
                 self._overlay_hide()
@@ -535,7 +541,9 @@ class MainApp(QApplication):
         """Mostra o overlay Siri."""
         try:
             from core.bridge_service import bridge
-            bridge.overlay_show()
+            print(f"DEBUG OVERLAY: Enviando overlay_show...")
+            result = bridge.overlay_show()
+            print(f"DEBUG OVERLAY: overlay_show result: {result}")
         except Exception as e:
             print(f"DEBUG OVERLAY: Erro ao mostrar overlay: {e}")
 
@@ -559,7 +567,9 @@ class MainApp(QApplication):
         """Envia resposta para o overlay."""
         try:
             from core.bridge_service import bridge
-            bridge.overlay_response(text)
+            print(f"DEBUG OVERLAY: Enviando overlay_response...")
+            result = bridge.overlay_response(text)
+            print(f"DEBUG OVERLAY: overlay_response result: {result}")
         except Exception as e:
             print(f"DEBUG OVERLAY: Erro ao enviar resposta: {e}")
 

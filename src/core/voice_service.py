@@ -542,13 +542,12 @@ class VoiceService:
                     
                     if not clean_text or len(clean_text) < 2: return
 
-                    cmd = ["say"]
-                    cmd.append("--")
-                    cmd.append(clean_text)
-                    
+                    print(f"TTS: Falando: '{clean_text[:50]}...'")
+                    cmd = ["say", "--", clean_text]
                     self.current_playback_process = subprocess.Popen(cmd)
                     self.current_playback_process.wait()
                     self.current_playback_process = None
+                    print(f"TTS: Finalizado")
                 except Exception as e:
                     print(f"ERRO VOZ NATIVO: {e}")
                 finally:
