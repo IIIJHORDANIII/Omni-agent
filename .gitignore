@@ -68,3 +68,6 @@ src/models/piper/*.json
 # Swift build directories
 SwiftAgent/.build/
 SwiftAgent/.swiftpm/
+
+# Memory and Session Data
+memory_db/
