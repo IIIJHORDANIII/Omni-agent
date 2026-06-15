@@ -50,7 +50,9 @@ class WakeWordService:
         """Carrega templates salvos."""
         if self.templates_file.exists():
             try:
-                self.templates = list(np.load(self.templates_file, allow_pickle=True))
+                loaded = np.load(self.templates_file, allow_pickle=True)
+                # Garantir float64 em todos os templates
+                self.templates = [t.astype(np.float64) for t in loaded]
                 print(f"WakeWord: {len(self.templates)} templates carregados")
             except Exception as e:
                 print(f"WakeWord: Erro ao carregar templates: {e}")
@@ -124,6 +126,9 @@ class WakeWordService:
     
     def add_template(self, audio):
         """Adiciona uma amostra como template."""
+        # Converter para float64
+        audio = audio.astype(np.float64)
+        
         # Resample para tamanho fixo (16000 samples = 1 segundo)
         target_len = self.RATE  # 1 segundo
         if len(audio) > target_len:
@@ -206,8 +211,8 @@ class WakeWordService:
         if norm1 < 1e-8 or norm2 < 1e-8:
             return 0.0
         
-        a1 = a1 / norm1
-        a2 = a2 / norm2
+        a1 = (a1 / norm1).astype(np.float64)
+        a2 = (a2 / norm2).astype(np.float64)
         
         # Correlação via FFT
         n = len(a1)
@@ -226,6 +231,9 @@ class WakeWordService:
         """
         if not self.is_trained():
             return False, 0.0
+        
+        # Garantir float64
+        audio_chunk = audio_chunk.astype(np.float64)
         
         # Normalizar chunk
         if len(audio_chunk) < self.RATE:
