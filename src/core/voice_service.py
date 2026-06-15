@@ -46,6 +46,7 @@ class VoiceService:
             self.audio_buffer = Queue()
             self.last_audio_time = time.time() 
             
+            self.cooldown_until = 0  # Timestamp até quando ignorar wake word (cooldown pós-comando)
             self.voice = "Siri"
             self.current_playback_process = None
             self.active_session_id = 0
@@ -263,12 +264,24 @@ class VoiceService:
             print(f"Voz: Falha crítica ao reiniciar áudio: {e}")
 
     def _run_wake_word_loop(self):
-        print("Monitorando Wake Word (Whisper Turbo)...")
-        last_process_time = time.time()
-        self._ensure_stream()
-        log_count = 0
+        """Loop contínuo de detecção de wake word por similaridade FFT."""
+        print("🎤 Sistema de similaridade FFT ativado (treinado)")
         
         while self.running:
+            if self.is_listening_active:
+                time.sleep(0.2)
+                continue
+            
+            # Pular detecção enquanto TTS está falando (evita re-trigger)
+            if self.is_speaking:
+                time.sleep(0.2)
+                continue
+            
+            # Cooldown após comando processado
+            if time.time() < self.cooldown_until:
+                time.sleep(0.2)
+                continue
+            
             if time.time() - last_process_time > 1.2:
                 audio_data = None
                 with self.audio_lock:
@@ -364,6 +377,8 @@ class VoiceService:
                                         if self.on_wake_word_detected:
                                             self.on_wake_word_detected()
                                             
+                                        # Cooldown de 4 segundos após wake word detectada
+                                        self.cooldown_until = time.time() + 4.0
                                         time.sleep(2.0)
 
                         except Exception as e:

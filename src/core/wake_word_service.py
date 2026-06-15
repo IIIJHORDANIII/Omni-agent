@@ -40,7 +40,7 @@ class WakeWordService:
         self.config_file = self.data_dir / "config.json"
         
         self.templates = []  # Lista de arrays numpy (áudios normalizados)
-        self.threshold = 0.45  # Similaridade mínima (0-1)
+        self.threshold = 0.50  # Similaridade mínima (0-1) - aumentado para reduzir falsos positivos
         self.min_samples = 3  # Mínimo de amostras para treinar
         
         self._load_templates()
@@ -234,6 +234,11 @@ class WakeWordService:
         
         # Garantir float64
         audio_chunk = audio_chunk.astype(np.float64)
+        
+        # Verificar energia mínima (evitar detecção em silêncio)
+        energy = np.sqrt(np.mean(audio_chunk**2))
+        if energy < 0.01:
+            return False, 0.0
         
         # Normalizar chunk
         if len(audio_chunk) < self.RATE:

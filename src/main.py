@@ -406,9 +406,6 @@ class MainApp(QApplication):
                 text = self.chat_window.voice_service.listen(continuous_mode=True)
                 if text and len(text.strip()) > 1:
                     clean = re.sub(r'[^\w\s]', '', text.lower()).strip()
-                    # A wake word já foi verificada pelo sistema de similaridade
-                    # Aqui o texto já é o comando p.ex. "bom dia" ou "abre o youtube"
-                    # Remover wake word se ainda estiver no início (caso Whisper tenha capturado)
                     wake_words = ["omni", "omniscient", "omniciente", "bagual", "hominy"]
                     for kw in wake_words:
                         clean = re.sub(r'^' + re.escape(kw) + r'\s*', '', clean).strip()
@@ -416,6 +413,12 @@ class MainApp(QApplication):
                         print(f"DEBUG WAKE: Comando: '{clean}'")
                         self._overlay_transcript(clean)
                         self._handle_command_cycle_with_overlay(clean)
+                        # Cooldown: esperar TTS e overlay finalizarem antes de retomar wake word
+                        while self.chat_window.voice_service.is_speaking:
+                            time.sleep(0.1)
+                        # Setar cooldown no voice_service para prevenir re-trigger
+                        self.chat_window.voice_service.cooldown_until = time.time() + 3.0
+                        time.sleep(2.0)
                     else:
                         self._overlay_hide()
                 else:
