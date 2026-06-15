@@ -1,6 +1,6 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFrame
 from PyQt6.QtCore import Qt, QTimer, QRectF
-from PyQt6.QtGui import QColor, QPainter, QBrush, QLinearGradient
+from PyQt6.QtGui import QColor, QPainter, QBrush
 import math
 
 try:
@@ -16,15 +16,13 @@ except ImportError:
 
 
 class SiriWaveWidget(QWidget):
-    """Barras de onda minimalistas — 4 barras finas estilo Siri."""
+    """Barras de onda — 4 linhas finas animadas."""
 
-    def __init__(self, parent=None, num_bars=4):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.num_bars = num_bars
         self._amp = 0.0
         self._target = 0.0
-        self._smooth = 0.10
-        self.setFixedSize(100, 28)
+        self.setFixedSize(140, 32)
 
     def set_amplitude(self, value: float):
         self._target = max(0.0, min(1.0, value))
@@ -32,34 +30,32 @@ class SiriWaveWidget(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        self._amp += (self._target - self._amp) * self._smooth
+        self._amp += (self._target - self._amp) * 0.10
 
         w, h = self.width(), self.height()
-        bar_w = 4
-        gap = 10
-        total = self.num_bars * bar_w + (self.num_bars - 1) * gap
+        n = 4
+        bar_w = 5
+        gap = 12
+        total = n * bar_w + (n - 1) * gap
         cx = (w - total) / 2
         cy = h / 2
 
-        for i in range(self.num_bars):
+        for i in range(n):
             x = cx + i * (bar_w + gap)
             phase = i * 1.0 + (self._amp * 2.2)
-            bar_h = 3 + (self._amp * (h - 6) * (0.35 + 0.65 * abs(math.sin(phase))))
+            bar_h = 3 + (self._amp * (h - 4) * (0.35 + 0.65 * abs(math.sin(phase))))
             y = cy - bar_h / 2
 
-            alpha = int(90 + 140 * self._amp)
-            color = QColor(255, 255, 255, alpha)
-
+            alpha = int(100 + 140 * self._amp)
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(color))
-            p.drawRoundedRect(QRectF(x, y, bar_w, bar_h), 2, 2)
+            p.setBrush(QBrush(QColor(255, 255, 255, alpha)))
+            p.drawRoundedRect(QRectF(x, y, bar_w, bar_h), 2.5, 2.5)
 
         p.end()
 
 
 class VoiceOverlay(QWidget):
-    """Overlay de voz estilo macOS Tahoe — glass, canto direito, ondas."""
+    """Retângulo glass + ondas. Nada mais."""
 
     def __init__(self):
         super().__init__()
@@ -88,7 +84,7 @@ class VoiceOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
-        self.setFixedSize(200, 56)
+        self.setFixedSize(200, 52)
         self._position()
 
         if HAS_NATIVE_BLUR:
@@ -120,70 +116,28 @@ class VoiceOverlay(QWidget):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
 
         self.container = QFrame()
         self.container.setStyleSheet("""
             QFrame {
                 background-color: rgba(30, 30, 38, 0.55);
                 border: 0.5px solid rgba(255, 255, 255, 0.08);
-                border-radius: 18px;
+                border-radius: 16px;
             }
         """)
 
         inner = QHBoxLayout(self.container)
-        inner.setContentsMargins(18, 0, 18, 0)
-        inner.setSpacing(12)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Status dot
-        self.dot = QFrame()
-        self.dot.setFixedSize(6, 6)
-        self._set_dot("#30d158")
-
-        # Label
-        self.label = QLabel("Ouvindo...")
-        self.label.setStyleSheet("""
-            QLabel {
-                color: rgba(255, 255, 255, 0.8);
-                font-size: 11px;
-                font-family: '.AppleSystemUIFont', 'Helvetica Neue', -apple-system, sans-serif;
-                font-weight: 500;
-                letter-spacing: 0.3px;
-            }
-        """)
-
-        # Ondas
-        self.wave = SiriWaveWidget(num_bars=4)
-
-        inner.addWidget(self.dot)
-        inner.addWidget(self.label)
-        inner.addStretch()
-        inner.addWidget(self.wave)
+        self.wave = SiriWaveWidget()
+        inner.addWidget(self.wave, alignment=Qt.AlignmentFlag.AlignCenter)
 
         layout.addWidget(self.container)
 
-    def _set_dot(self, color: str):
-        self.dot.setStyleSheet(f"""
-            QFrame {{
-                background-color: {color};
-                border-radius: 3px;
-                border: none;
-            }}
-        """)
-
     def set_state(self, state: str):
-        states = {
-            "listening": ("Ouvindo...", "#ff453a"),
-            "speaking": ("Falando...", "#64d2ff"),
-            "thinking": ("Pensando...", "#ffd60a"),
-            "idle": ("", "#30d158"),
-        }
-        text, dot_color = states.get(state, states["idle"])
-        self.label.setText(text)
-        self._set_dot(dot_color)
-
         if state == "idle":
-            self._hide_timer.start(1200)
+            self._hide_timer.start(1000)
         else:
             self._hide_timer.stop()
             self._fading = False
