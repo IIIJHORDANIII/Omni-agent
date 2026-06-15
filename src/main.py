@@ -91,6 +91,11 @@ class MainApp(QApplication):
         registry.register("llm", self.chat_window.llm_client)
         registry.register("permission_gate", self.permission_gate)
         
+        # Conecta amplitude de áudio do VoiceService ao VoiceOverlay (Siri UI)
+        voice_svc = self.chat_window.voice_service
+        voice_overlay = self.hud.voice_overlay
+        voice_svc.amplitude_callback = lambda amp: voice_overlay.set_amplitude(min(amp * 50, 1.0))
+        
         # Referência compartilhada do VisionService (evita múltiplos carregamentos)
         shared_vision = self.chat_window.llm_client.vision_service
         

@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import QWidget, QLabel, QHBoxLayout, QFrame, QVBoxLayout
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
 from core.system_monitor import SystemMonitor
+from ui.voice_overlay import VoiceOverlay
 import sys
 
 # Tenta importar as bibliotecas nativas do macOS para o efeito de Glass/Vibrancy
@@ -13,54 +14,6 @@ try:
 except ImportError as e:
     print(f"DEBUG: AppKit/objc import failed: {e}")
     HAS_NATIVE_BLUR = False
-
-class VoiceIndicator(QWidget):
-    """Círculo no canto superior direito para indicação de voz/fala."""
-    def __init__(self):
-        super().__init__()
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | 
-            Qt.WindowType.WindowStaysOnTopHint | 
-            Qt.WindowType.Tool |
-            Qt.WindowType.WindowDoesNotAcceptFocus |
-            Qt.WindowType.WindowTransparentForInput
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        self.setFixedSize(100, 100)
-        
-        layout = QVBoxLayout(self)
-        self.circle = QFrame()
-        self.circle.setFixedSize(40, 40)
-        # Estilo JARVIS: Brilho externo e borda neon
-        self.circle.setStyleSheet("""
-            background-color: rgba(0, 212, 255, 30);
-            border: 2px solid #00d4ff;
-            border-radius: 20px;
-        """)
-        layout.addWidget(self.circle, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.hide()
-
-    def show_state(self, state="LISTENING"):
-        colors = {
-            "LISTENING": "rgba(255, 59, 48, 100)", # Vermelho suave
-            "SPEAKING": "rgba(0, 212, 255, 100)"   # Azul suave
-        }
-        border_colors = {"LISTENING": "#ff3b30", "SPEAKING": "#00d4ff"}
-        
-        color = colors.get(state, "rgba(0, 212, 255, 100)")
-        border = border_colors.get(state, "#00d4ff")
-        
-        self.circle.setStyleSheet(f"""
-            background-color: {color};
-            border: 3px solid {border};
-            border-radius: 20px;
-        """)
-        
-        # Posiciona no canto superior direito com margem
-        screen = self.screen().geometry()
-        self.move(screen.width() - 120, 60)
-        self.show()
 
 class HUDOverlay(QWidget):
     # ... (sinais e init seguem iguais)
@@ -79,19 +32,19 @@ class HUDOverlay(QWidget):
         self.hide_timer.timeout.connect(self.hide)
         
         # Voice Indicator Popup
-        self.voice_indicator = VoiceIndicator()
+        self.voice_overlay = VoiceOverlay()
         
         self.display_signal.connect(self.update_hud)
         self.context_signal.connect(self.update_context_wall)
-        self.voice_signal.connect(self._handle_voice_indicator)
+        self.voice_signal.connect(self._handle_voice_overlay)
         
         self.init_ui()
 
-    def _handle_voice_indicator(self, state, visible):
+    def _handle_voice_overlay(self, state, visible):
         if visible:
-            self.voice_indicator.show_state(state)
+            self.voice_overlay.set_state(state.lower())
         else:
-            self.voice_indicator.hide()
+            self.voice_overlay.set_state("idle")
 
     def apply_vibrancy(self):
         """Desativado temporariamente para corrigir bug do quadrado preto/blur."""

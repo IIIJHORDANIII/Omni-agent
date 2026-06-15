@@ -27,6 +27,7 @@ class VoiceService:
             self._is_speaking_internal = False 
             self.on_wake_word_detected = on_wake_word_detected
             self.status_callback = None # Para notificar início/fim de fala
+            self.amplitude_callback = None # Para notificar UI com nível de áudio em tempo real
             self.running = True
             self.audio_lock = threading.Lock()
             self.speaking_lock = threading.Lock() # Lock exclusivo para saída de voz
@@ -139,6 +140,13 @@ class VoiceService:
                 energy = np.sqrt(np.mean(audio_np**2))
                 if energy > 0.002:
                     self.audio_buffer.put(data)
+                
+                # Notifica a UI com o nível de áudio (para ondas animadas)
+                if self.amplitude_callback:
+                    try:
+                        self.amplitude_callback(energy)
+                    except Exception:
+                        pass
                 
                 self.last_audio_time = time.time()
             except Exception as e:
