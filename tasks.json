@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1781483171488,
+    "title": "Teste de tarefa",
+    "description": "",
+    "priority": "alta",
+    "status": "pendente",
+    "created_at": "2026-06-14T21:26:11.488949",
+    "due_date": null,
+    "tags": [],
+    "subtasks": [],
+    "notes": ""
+  }
+]

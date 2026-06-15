@@ -204,10 +204,64 @@ class IdentityPage(StyledPage):
             cv2.imwrite(os.path.join(save_dir, filename), frame)
 
     def _finalize_face(self):
-        self.face_instructions.setText("✅ MAPEAMENTO COMPLETO")
-        self.face_instructions.setStyleSheet("color: #34c759; font-weight: bold;")
-        self.viewfinder.setStyleSheet("background: #000; border: 4px solid #34c759; border-radius: 10px;")
+        self.face_instructions.setText("MAPEAMENTO COMPLETO - Gerando perfil visual...")
+        self.face_instructions.setStyleSheet("color: #af52de; font-weight: bold;")
+        self.viewfinder.setStyleSheet("background: #000; border: 4px solid #af52de; border-radius: 10px;")
         self.cam_worker.stop()
+
+        # Gera o perfil visual (descricao textual) a partir da foto frontal
+        def _generate_profile():
+            try:
+                from core.vision_service import VisionService
+                import cv2
+
+                save_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory_db")
+                front_path = os.path.join(save_dir, "user_face_front.jpg")
+
+                if not os.path.exists(front_path):
+                    print("Setup: Foto frontal nao encontrada.")
+                    return
+
+                # Carrega a imagem frontal
+                img_bgr = cv2.imread(front_path)
+                if img_bgr is None:
+                    print("Setup: Erro ao ler foto frontal.")
+                    return
+
+                # Converte para PIL
+                from PIL import Image
+                import numpy as np
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(img_rgb)
+
+                # Usa o VisionService para gerar descricao
+                vision = VisionService()
+                vision._ensure_model_loaded()
+
+                if vision.model is None or vision.processor is None:
+                    print("Setup: Modelo de visao indisponivel.")
+                    return
+
+                from mlx_vlm import generate as vlm_gen
+                prompt = "Descreva detalhadamente as caracteristicas fisicas desta pessoa (cabelo, barba, oculos, tracos marcantes, roupa, idade aproximada) para que eu posa reconhece-la depois. Seja preciso e objetivo."
+                result = vlm_gen(vision.model, vision.processor, image=pil_img, prompt=prompt, max_tokens=150)
+
+                profile = ""
+                if isinstance(result, str): profile = result
+                elif hasattr(result, 'text'): profile = result.text
+                else: profile = str(result)
+
+                if profile and len(profile) > 10:
+                    from core.memory_client import MemoryClient
+                    memory = MemoryClient()
+                    memory.save_fact("user_visual_profile", profile)
+                    print(f"Setup: Perfil visual salvo: {profile[:80]}...")
+                else:
+                    print("Setup: Falha ao gerar descricao visual.")
+            except Exception as e:
+                print(f"Setup: Erro ao gerar perfil visual: {e}")
+
+        threading.Thread(target=_generate_profile, daemon=True).start()
 
     def record_voice(self):
         self.voice_btn.setEnabled(False)
@@ -224,29 +278,74 @@ class IdentityPage(StyledPage):
                 frames = []
                 for _ in range(0, int(16000 / 1024 * 10)): # 10 seg
                     frames.append(stream.read(1024))
+                sample_size = p.get_sample_size(pyaudio.paInt16)
                 stream.stop_stream()
                 stream.close()
                 p.terminate()
                 
-                os.makedirs("memory_db", exist_ok=True)
-                with wave.open("memory_db/user_voice.wav", 'wb') as wf:
+                save_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory_db")
+                os.makedirs(save_dir, exist_ok=True)
+                wav_path = os.path.join(save_dir, "user_voice.wav")
+                with wave.open(wav_path, 'wb') as wf:
                     wf.setnchannels(1)
-                    wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
+                    wf.setsampwidth(sample_size)
                     wf.setframerate(16000)
                     wf.writeframes(b''.join(frames))
+
+                # Processa o WAV em voiceprint (embedding MFCC)
+                try:
+                    import numpy as np
+                    import wave as wav_mod
+
+                    with wav_mod.open(wav_path, 'rb') as wf:
+                        raw = wf.readframes(wf.getnframes())
+                        audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+
+                    # Divide em 3 amostras de ~3s cada
+                    chunk_size = len(audio_np) // 3
+                    samples = [
+                        audio_np[:chunk_size],
+                        audio_np[chunk_size:chunk_size*2],
+                        audio_np[chunk_size*2:]
+                    ]
+
+                    from core.voiceprint_service import VoiceprintService
+                    vp = VoiceprintService()
+                    if vp.register(samples):
+                        print("Setup: Voiceprint registrado com sucesso!")
+                    else:
+                        print("Setup: Falha ao registrar voiceprint.")
+                except Exception as e:
+                    print(f"Setup: Erro ao processar voiceprint: {e}")
                 
-                QMetaObject.invokeMethod(self.voice_status, "setText", Qt.ConnectionType.QueuedConnection, Q_ARG(str, "✅ ASSINATURA REGISTRADA"))
+                QMetaObject.invokeMethod(self.voice_status, "setText", Qt.ConnectionType.QueuedConnection, Q_ARG(str, "ASSINATURA REGISTRADA"))
                 QMetaObject.invokeMethod(self.voice_status, "setStyleSheet", Qt.ConnectionType.QueuedConnection, Q_ARG(str, "color: #34c759; font-weight: bold; border: none;"))
             except Exception as e:
-                print(f"Erro na gravação: {e}")
+                print(f"Erro na gravacao: {e}")
             
         threading.Thread(target=_rec, daemon=True).start()
 
 class BrainsPage(StyledPage):
     def __init__(self, parent=None):
         super().__init__("NÚCLEO NEURAL", "Configure suas conexões de nuvem.", parent)
+        
+        self.add_label("MOTOR PRINCIPAL (CÉREBRO)")
+        self.engine_selector = QComboBox()
+        self.engine_selector.addItems(["LOCAL (MLX - 100% Privado)", "CLOUD (DeepSeek API - Inteligência Total)"])
+        self.engine_selector.setStyleSheet("""
+            QComboBox { 
+                background: #1a1a2e; 
+                color: #ffffff; 
+                border: 2px solid #00d4ff; 
+                border-radius: 6px;
+                padding: 10px;
+                font-weight: bold;
+            }
+        """)
+        self.layout.addWidget(self.engine_selector)
+
         self.inputs = {}
-        keys = [("DEEPSEEK_API_KEY", "DeepSeek API"), ("ANTHROPIC_API_KEY", "Anthropic Claude"), ("GOOGLE_GENERATIVE_AI_API_KEY", "Google Gemini Pro")]
+        keys = [("DEEPSEEK_API_KEY", "DeepSeek API Key"), ("ANTHROPIC_API_KEY", "Anthropic Claude"), ("GOOGLE_GENERATIVE_AI_API_KEY", "Google Gemini Pro")]
         for env, label in keys:
             self.add_label(label)
             edit = QLineEdit()
@@ -367,9 +466,19 @@ class SetupWizard(QDialog):
 
     def finish(self):
         print("SetupWizard: Finalizando...")
-        env = [f"USER_NAME={self.p1.name_input.text() or 'Mestre'}"]
+        # Define o provider baseado na seleção
+        provider = "LOCAL" if "LOCAL" in self.p3.engine_selector.currentText() else "DEEPSEEK"
+        # Pega a personalidade (apenas o primeiro nome, ex: OMNI, H.A.L, Samantha)
+        personality = self.p1.personality.currentText().split(" ")[0]
+        
+        env = [
+            f"USER_NAME={self.p1.name_input.text() or 'Mestre'}",
+            f"LLM_PROVIDER={provider}",
+            f"PERSONALITY={personality}"
+        ]
         for k, v in self.p3.inputs.items(): env.append(f"{k}={v.text()}")
         for k, v in self.p4.inputs.items(): env.append(f"{k}={v.text()}")
+        
         with open(".env", "w") as f: f.write("\n".join(env))
         self.accept()
 

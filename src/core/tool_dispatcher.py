@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import os
 import sys
+import re
 from core.execution_service import ExecutionService
 from core.tool_registry import tool_registry
 
@@ -11,273 +12,239 @@ import core.tools.system_tools
 import core.tools.communication_tools
 import core.tools.dev_tools
 import core.tools.ai_tools
+import core.tools.file_tools
+import core.tools.productivity_tools
 
 class ToolDispatcher:
     @staticmethod
     def dispatch(llm_response):
-        """Analisa a resposta do LLM e executa ferramentas registradas dinamicamente."""
+        """Analisa a resposta do LLM e executa ferramentas de forma extremamente robusta."""
         from main import MainApp
         main_app = MainApp.instance() if hasattr(MainApp, 'instance') else None
         
-        sanitized_response = ToolDispatcher._sanitize(llm_response)
+        # 1. Extração Agressiva de JSON
+        data = ToolDispatcher._extract_json(llm_response)
         
-        try:
-            data = ToolDispatcher._extract_json(sanitized_response)
-            if not data:
-                return sanitized_response.strip()
+        # 1b. Fallback: se nao tem JSON, tenta inferir da texto conversacional
+        if not data:
+            inferred = ToolDispatcher._infer_tool_from_text(llm_response)
+            if inferred:
+                data = inferred
+        
+        if not data:
+            return ToolDispatcher._remove_think_tags(llm_response)
+        
+        if isinstance(data, dict):
+            data = [data]
+        
+        results = []
+        for item in data:
+            if not isinstance(item, dict): continue
             
-            if isinstance(data, dict):
-                data = [data]
+            # 2. Mapeamento Inteligente (Heurística de Ferramenta)
+            tool_name = item.get("tool") or item.get("action")
+            params = item.get("params") or {}
             
-            results = []
-            for item in data:
-                if not isinstance(item, dict): continue
-                    
-                tool_name = item.get("tool") or item.get("action")
-                params = item.get("params")
-                if params is None:
-                    params = {k: v for k, v in item.items() if k not in ["tool", "action", "message"]}
-                
-                if tool_name is None or tool_name == "none":
-                    msg = item.get("message")
-                    if msg: results.append(msg)
-                    continue
-                
-                print(f"Dispatcher: Executando {tool_name} com params: {params}")
-                if main_app:
-                    main_app.hud.display_signal.emit(f"Executando {tool_name}...", "THINKING", 0)
-                
-                result = None
-                # Roteamento Inteligente
-                if tool == "open_app":
-                    result = ExecutionService.open_app(params.get("app") or params.get("app_name") or "")
-                elif tool == "control_app":
-                    result = ExecutionService.control_app_ui(
-                        params.get("app") or params.get("app_name"),
-                        params.get("action") or params.get("script")
-                    )
-                elif tool == "open_url":
-                    url = params.get("url") or params.get("link") or ""
-                    if url:
-                        result = ExecutionService.open_url(url)
-                    else:
-                        result = "Faltou me dizer qual site abrir."
-                elif tool in ["mail_search", "search_emails", "buscar_emails"]:
-                    result = ExecutionService.mail_search(params.get("query") or params.get("termo") or "")
-                elif tool in ["mail_unread", "unread_emails", "emails_nao_lidos"]:
-                    result = ExecutionService.mail_unread(params.get("count", 10))
-                elif tool == "mail_list":
-                    result = ExecutionService.get_latest_emails(params.get("count", 5))
-                elif tool == "describe_screen" or tool == "analyze_screen":
-                    # Usa o VisionService real em vez do Swift nativo
-                    from core.vision_service import VisionService
-                    vision = VisionService()
-                    result = vision.describe_screen()
-                elif tool == "run_protocol":
-                    from core.protocol_manager import ProtocolManager
-                    from core.llm_manager import LLMManager
-                    llm = LLMManager()
-                    result = ProtocolManager.run_protocol(params.get("name"), llm_manager=llm)
-                elif tool == "create_tool" or tool == "genesis_tool":
-                    from core.tool_generator import ToolGenerator
-                    from core.llm_manager import LLMManager
-                    llm = LLMManager()
-                    result = ToolGenerator.generate_and_execute(llm, params.get("requirement") or params.get("task", ""))
-                elif tool == "set_volume":
-                    level = params.get("level") or params.get("volume", 50)
-                    result = ExecutionService.set_system_volume(level)
-                elif tool == "set_brightness":
-                    level = params.get("level") or params.get("brightness", 50)
-                    result = ExecutionService.manage_hardware("set_brightness", level)
-                elif tool == "run_python":
-                    code = params.get("code") or ""
-                    result = ToolDispatcher._execute_python_sandbox(code)
-                elif tool == "run_shell":
-                    command = params.get("command") or ""
-                    result = ExecutionService.run_terminal_command(command)
-                elif tool == "list_files":
-                    dir_path = params.get("path") or "."
-                    result = ExecutionService.list_files(dir_path)
-                elif tool == "read_file":
-                    file_path = params.get("path") or ""
-                    result = ExecutionService.read_file(file_path)
-                elif tool == "generate_project":
-                    result = ExecutionService.generate_project(
-                        params.get("path") or params.get("base_path", "novo_projeto"),
-                        params.get("files") or params.get("files_dict", {})
-                    )
-                elif tool == "web_search":
-                    query = params.get("query") or ""
-                    result = WebService.search_and_summarize(query)
-                elif tool == "web_read":
-                    url = params.get("url") or ""
-                    result = WebService.get_page_content(url)
-                elif tool == "search_files":
-                    pattern = params.get("pattern") or ""
-                    path = params.get("path") or "."
-                    cmd = f"grep -rnw '{path}' -e '{pattern}' | head -n 20"
-                    result = ExecutionService.run_terminal_command(cmd)
-                elif tool == "memory_write":
-                    # Salva fatos na memória persistente
-                    key = params.get("key") or params.get("path") or "fato_geral"
-                    value = params.get("value") or params.get("body") or ""
-                    result = memory.save_fact(key, value)
-                elif tool == "memory_query":
-                    # Busca na memória
-                    key = params.get("key") or params.get("query") or ""
-                    result = memory.get_fact(key)
-                elif tool == "mail_draft":
-                    result = ExecutionService.mail_create_draft(
-                        params.get("subject", "Sem Assunto"),
-                        params.get("body", ""),
-                        params.get("recipient", "")
-                    )
-                elif tool == "notes_search":
-                    result = ExecutionService.notes_search(params.get("query", ""))
-                elif tool == "create_note" or tool == "create_new_note":
-                    # Aceita tanto 'path'/'name' quanto 'title' para o nome da nota
-                    note_name = params.get("path") or params.get("name") or params.get("title") or "Nota sem título.txt"
-                    # Garante extensão .txt se não houver
-                    if not note_name.endswith(".txt") and not "." in note_name:
-                        note_name += ".txt"
-                    result = ExecutionService.create_new_note(note_name, params.get("content") or params.get("body", ""))
-                elif tool == "clear_notes":
-                    result = ExecutionService.clear_notes()
-                elif tool == "finder_move":
-                    result = ExecutionService.finder_move_file(params.get("source"), params.get("dest"))
-                elif tool == "finder_rename":
-                    result = ExecutionService.finder_rename_file(params.get("path"), params.get("name"))
-                elif tool == "get_system_info":
-                    result = ExecutionService.get_system_info()
-                elif tool == "run_tests":
-                    result = ExecutionService.run_tests(params.get("path") or ".")
-                elif tool == "github_list_prs":
-                    result = github.get_pull_requests(params.get("repo") or params.get("repository", ""))
-                elif tool == "github_pr_details":
-                    result = github.get_pr_details(params.get("repo") or params.get("repository", ""), params.get("pr") or params.get("number", 0))
-                elif tool == "github_create_pr":
-                    result = github.create_pull_request(
-                        params.get("repo") or params.get("repository", ""),
-                        params.get("title", "Update from Omni-agent"),
-                        params.get("head"),
-                        params.get("base", "main"),
-                        params.get("body", "")
-                    )
-                elif tool == "github_commits":
-                    result = github.get_recent_commits(params.get("repo") or params.get("repository", ""), params.get("count", 5))
-                elif tool == "linear_my_issues":
-                    result = linear.get_my_issues()
-                elif tool == "linear_cycle":
-                    result = linear.get_cycle_summary()
-                elif tool == "project_summary":
-                    result = ExecutionService.get_project_summary(params.get("path") or ".")
-                elif tool == "find_project":
-                    result = ExecutionService.find_project(params.get("name") or params.get("query", ""))
-                elif tool == "get_calendar_events":
-                    result = ExecutionService.get_calendar_events()
-                elif tool == "get_reminders":
-                    result = ExecutionService.get_reminders()
-                elif tool == "add_reminder":
-                    result = ExecutionService.add_reminder(params.get("title") or params.get("name", ""))
-                elif tool == "toggle_mute":
-                    # Delegar para Swift (Native Bridge)
-                    swift_command = {"action": tool, **params}
-                    result = ExecutionService.send_command_to_swift(swift_command)
-                elif tool == "run_shortcut":
-                    result = ExecutionService.run_shortcut(params.get("name"), params.get("input", ""))
-                elif tool == "list_shortcuts":
-                    result = ExecutionService.list_shortcuts()
-                elif tool == "set_focus":
-                    result = ExecutionService.set_focus_mode(params.get("mode", "Não Perturbe"))
-                elif tool == "screenshot":
-                    result = ExecutionService.capture_screen(params.get("path"))
-                elif tool == "download_file":
-                    result = ExecutionService.download_file(params.get("url"), params.get("path"))
-                elif tool == "media_cut":
-                    from core.media_editor import MediaEditor
-                    result = MediaEditor.cut_video(params.get("input"), params.get("start"), params.get("duration"), params.get("output"))
-                elif tool == "media_to_mp3":
-                    from core.media_editor import MediaEditor
-                    result = MediaEditor.convert_to_mp3(params.get("input"), params.get("output"))
-                elif tool == "generate_image":
-                    from core.image_generator import ImageGenerator
-                    result = ImageGenerator.generate_image(params.get("prompt"), params.get("output"))
-                else:
-                    if hasattr(ExecutionService, tool):
-                        method = getattr(ExecutionService, tool)
-                        result = method(**params)
-                    else:
-                        result = f"Ferramenta {tool} não encontrada."
+            # Se params vazio, tenta extrair do nivel superior
+            if not params:
+                known_params = ["app", "app_name", "path", "query", "command", "text", 
+                               "content", "title", "body", "url", "link", "name", "skill",
+                               "task", "pedido", "code", "args", "number", "pr", "repo",
+                               "repository", "count", "duration", "priority", "status",
+                               "prompt", "output", "filename", "old_string", "new_string",
+                               "old", "new", "source", "dest", "dest_folder", "action",
+                               "x", "y", "key", "level", "target", "message", "recipient",
+                               "subject", "identifier", "tags", "due"]
+                for kp in known_params:
+                    if kp in item and kp != "tool" and kp != "action":
+                        params[kp] = item[kp]
+            
+            # Se não tem tool_name mas tem chaves conhecidas, mapeia automaticamente
+            if not tool_name:
+                if "command" in item or "osascript" in str(item):
+                    tool_name = "run_shell"
+                    params = {"command": item.get("command") or item.get("osascript") or str(item)}
+                elif "query" in item and len(item) == 1:
+                    tool_name = "smart_search"
+                    params = {"query": item.get("query")}
+                elif "prompt" in item and "image" in str(item).lower():
+                    tool_name = "generate_image"
+                    params = {"prompt": item.get("prompt")}
+            
+            if not tool_name or tool_name == "none":
+                continue
 
-                # Formatação Amigável do Resultado
-                if isinstance(result, dict):
-                    if tool in ["describe_screen", "analyze_screen"] or result.get("action") == "analyze_screen":
-                        text = result.get("analysis") or result.get("text", "")
-                        if text:
-                            results.append(f"Na sua tela eu vejo: {text[:200]}...")
-                        else:
-                            results.append("Não consegui identificar nada na tela agora.")
-                    elif result.get("status") == "error":
-                        results.append(f"Erro ao executar {tool}.")
-                    elif "stdout" in result:
-                        # Se for uma ferramenta de leitura (e-mail, calendário), mostra o conteúdo
-                        content = result["stdout"].strip()
-                        if content:
-                            results.append(content)
-                        else:
-                            results.append("Concluído (sem detalhes).")
-                    elif result.get("status") == "queued":
-                        results.append(f"Pronto.")
-                    else:
-                        results.append("Concluído.")
-                else:
-                    results.append(f"Ferramenta '{tool_name}' não encontrada.")
+            print(f"Dispatcher: Executando {tool_name}({params})...")
+            if main_app:
+                main_app.hud.display_signal.emit(f"Executando {tool_name}...", "THINKING", 2000)
             
-            return "\n".join(results)
+            # 3. Checagem de Segurança Ponderada
+            from core.safety_service import SafetyService
+            is_read_only = any(kw in str(params).lower() for kw in ["ls", "mdfind", "cat", "grep", "list", "get"])
             
-        except Exception as e:
-            return f"Erro ao processar comando: {e}"
+            if SafetyService.is_critical(tool_name, params) and not is_read_only:
+                print(f"Safety: Ação '{tool_name}' aguardando aprovação...")
+                if not SafetyService.request_human_approval(tool_name, params):
+                    results.append(f"Ação '{tool_name}' negada pelo usuário.")
+                    continue
+
+            # 4. Execução
+            tool_func = tool_registry.get_tool(tool_name)
+            if tool_func:
+                try:
+                    # Filtra params para aceitar apenas os que a função aceita
+                    import inspect
+                    sig = inspect.signature(tool_func)
+                    valid_params = {k: v for k, v in params.items() if k in sig.parameters}
+                    # Adiciona params None para os que faltam (com default)
+                    for pname, param in sig.parameters.items():
+                        if pname not in valid_params and param.default is not inspect.Parameter.empty:
+                            valid_params[pname] = param.default
+                    result = tool_func(**valid_params)
+                    results.append(ToolDispatcher._format_result(tool_name, result))
+                    if main_app and "Erro" not in str(result): main_app.sound.success()
+                except Exception as tool_err:
+                    results.append(f"Erro ao executar {tool_name}: {tool_err}")
+            else:
+                results.append(f"Ferramenta '{tool_name}' não encontrada.")
+        
+        return "\n".join(results)
 
     @staticmethod
-    def _sanitize(text):
-        if "<think>" in text:
-            if "</think>" in text:
-                return text.split("</think>")[-1]
-            start_json = text.find('[')
-            if start_json != -1: return text[start_json:]
-        return text
+    def _remove_think_tags(text):
+        """Remove tags de pensamento para retorno limpo."""
+        return re.sub(r'<(think|reasoning)>.*?</\1>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
 
     @staticmethod
     def _extract_json(text):
+        """Extrai JSON de qualquer lugar da string, mesmo mal formatado."""
         try:
-            import re
-            # Prioridade para blocos de código JSON
-            code_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
-            if code_match:
-                return json.loads(code_match.group(1))
+            # Prioridade para blocos de codigo markdown
+            code_match = re.search(r'```(?:json)?\s*(.*?)\s*```', text, re.DOTALL)
+            json_str = code_match.group(1) if code_match else text
             
-            # Busca por colchetes ou chaves
-            start_arr = text.find('[')
-            start_obj = text.find('{')
-            
-            if start_arr != -1 and (start_obj == -1 or start_arr < start_obj):
-                start, end = start_arr, text.rfind(']') + 1
-            elif start_obj != -1:
-                start, end = start_obj, text.rfind('}') + 1
-            else:
+            # Tenta encontrar o primeiro objeto JSON valido
+            # Usa busca nao-greedy para evitar capturar texto demais
+            start = json_str.find('{')
+            if start == -1:
+                start = json_str.find('[')
+            if start == -1:
                 return None
-                
-            return json.loads(text[start:end])
+            
+            # Conta chaves/colchetes para encontrar o fechamento correto
+            depth = 0
+            in_string = False
+            escape = False
+            end = -1
+            opener = json_str[start]
+            closer = '}' if opener == '{' else ']'
+            
+            for i in range(start, len(json_str)):
+                c = json_str[i]
+                if escape:
+                    escape = False
+                    continue
+                if c == '\\' and in_string:
+                    escape = True
+                    continue
+                if c == '"' and not escape:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if c == opener or (opener == '{' and c == '[') or (opener == '[' and c == '{'):
+                    depth += 1
+                elif c == closer or (closer == '}' and c == ']') or (closer == ']' and c == '}'):
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            
+            if end > start:
+                candidate = json_str[start:end]
+                return json.loads(candidate)
         except:
-            return None
+            pass
+        return None
+
+    @staticmethod
+    def _infer_tool_from_text(text):
+        """Tenta inferir a ferramenta a partir de texto conversacional (fallback)."""
+        clean = text.lower().strip()
+        clean = re.sub(r'[^\w\s]', '', clean)
+        
+        # Sites conhecidos como URL (ANTES de app detection)
+        known_sites = {"youtube": "https://youtube.com", "google": "https://google.com",
+                       "github": "https://github.com", "twitter": "https://twitter.com",
+                       "x": "https://x.com", "instagram": "https://instagram.com",
+                       "facebook": "https://facebook.com", "linkedin": "https://linkedin.com"}
+        for site, url in known_sites.items():
+            if site in clean and ("abre" in clean or "abra" in clean or "abrir" in clean):
+                return [{"tool": "open_url", "url": url}]
+        
+        # Padroes de URL explicita
+        url_patterns = [
+            r'(?:abre|abra|abra)\s+(?:o\s+)?(?:link|url|site|pagina|canal)\s+(.+)',
+            r'(?:abre|abra|abra)\s+(?:o\s+)?(\w+\.\w+)',
+        ]
+        for pat in url_patterns:
+            m = re.search(pat, clean)
+            if m:
+                url = m.group(1).strip()
+                if not url.startswith("http"):
+                    url = "https://" + url
+                return [{"tool": "open_url", "url": url}]
+        
+        # Padroes de abertura de app
+        open_patterns = [
+            r'(?:abre|abra|abr[ir]|abrir)\s+(?:o\s+|a\s+|os\s+|as\s+)?(?:app\s+|aplicativo\s+)?(?:de\s+|do\s+|da\s+)?(\w+)(?:\s+para\s+.*?)?$',
+            r'(?:abre|abra|abr[ir]|abrir)\s+(?:o\s+|a\s+)?(\w+)(?:\s+para\s+.*?)?$',
+        ]
+        for pat in open_patterns:
+            m = re.search(pat, clean)
+            if m:
+                app_name = m.group(1).strip()
+                if app_name in ["para", "mim", "por", "gentileza", "agora", "voce", "tu", "me", "te"]:
+                    continue
+                app_map = {"notas": "Notes", "notes": "Notes", "calendar": "Calendar", 
+                          "calendario": "Calendar", "vscode": "Visual Studio Code",
+                          "code": "Visual Studio Code", "cursor": "Cursor", "finder": "Finder"}
+                resolved = app_map.get(app_name, app_name)
+                return [{"tool": "open_app", "app": resolved}]
+        
+        # Padroes de criacao
+        create_patterns = [
+            r'(?:cria|criar|crie|nova?|novo)\s+(?:uma?\s+)?(?:nota|lembrete|evento|tarefa)\s*(.*)',
+        ]
+        for pat in create_patterns:
+            m = re.search(pat, clean)
+            if m:
+                content = m.group(1).strip() if m.group(1) else ""
+                if "nota" in clean:
+                    return [{"tool": "create_note", "title": content or "Nova nota", "content": content}]
+                elif "lembrete" in clean:
+                    return [{"tool": "add_reminder", "title": content}]
+                return [{"tool": "create_note", "title": content or "Nova nota", "content": content}]
+        
+        # Padroes de delecao
+        delete_patterns = [
+            r'(?:deleta|delete|exclu|apaga|remove)\s+(?:tod[oa]s?\s+)?(?:as?\s+)?(.+)',
+        ]
+        for pat in delete_patterns:
+            m = re.search(pat, clean)
+            if m:
+                target = m.group(1).strip()
+                if "nota" in target:
+                    return [{"tool": "delete_all_notes"}]
+                return None
+        
+        return None
 
     @staticmethod
     def _format_result(tool, result):
-        """Formata o resultado para o LLM, incluindo metadados de execução."""
+        """Formata o resultado para o LLM."""
         status = "SUCCESS"
         if isinstance(result, str) and ("Erro" in result or "falhou" in result or "não encontrei" in result.lower()):
-            status = "FAILURE"
-        elif isinstance(result, dict) and result.get("returncode", 0) != 0:
             status = "FAILURE"
             
         output = str(result)
@@ -285,4 +252,4 @@ class ToolDispatcher:
             if "stdout" in result: output = result["stdout"].strip() or "Concluído."
             if "error" in result: output = f"Erro: {result['error']}"
         
-        return f"[OBSERVATION: {tool}] status: {status}\noutput: {output}"
+        return f"[RESULTADO: {tool}] {status}\n{output}"

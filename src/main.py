@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import threading
 import subprocess
 import psutil
@@ -7,11 +8,14 @@ import time
 
 # Configura o app para rodar apenas como agente de background (sem ícone no Dock)
 if sys.platform == "darwin":
-    from AppKit import NSBundle
-    bundle = NSBundle.mainBundle()
-    info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
-    if info:
-        info["LSUIElement"] = "1"
+    try:
+        from AppKit import NSBundle
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info:
+            info["LSUIElement"] = "1"
+    except ImportError:
+        pass
 
 # Ajusta o path para que os imports funcionem corretamente
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -30,7 +34,6 @@ from PyQt6.QtCore import QTimer
 from core.registry import registry
 from ui.chat_window import ChatWindow
 from ui.hud import HUDOverlay
-from utils.hotkeys import GlobalHotkeyHandler
 from core.monitor_service import MonitorService
 from core.hardware_manager import HardwareManager
 from core.sound_service import SoundService
@@ -93,7 +96,7 @@ class MainApp(QApplication):
         
         # Recall Service (Memória Fotográfica)
         self.recall = RecallService(self.chat_window.llm_client.manager)
-        self.recall.vision = shared_vision # Injeta a instância única
+        self.recall.vision = shared_vision
         
         # Night Watch (Patrulha Noturna)
         self.night_watch = NightWatch(self.chat_window.llm_client.manager)
@@ -105,34 +108,25 @@ class MainApp(QApplication):
         self.context_aggregator = ContextAggregator()
         self.context_timer = QTimer()
         self.context_timer.timeout.connect(self._update_context_wall)
-        self.context_timer.start(10000) # Atualiza contexto a cada 10s
+        self.context_timer.start(10000)
         
         # Sound Service
         self.sound = SoundService()
         
-        # Central Watchdog Observer (Evita conflitos de FSEvents no macOS)
+        # Central Watchdog Observer
         from watchdog.observers import Observer
         self.file_observer = Observer()
 
-        # Forge: Asset Manager (Otimização de imagens)
+        # Forge: Asset Manager
         self.asset_manager = AssetManagerService()
-        # Auto-Organizer: Monitora e organiza downloads via IA
+        # Auto-Organizer
         self.organizer = AutoOrganizerService(self.chat_window.llm_client)
-        # Background Agents: Linting, Dependency Scout, Commit Guard
+        # Background Agents
         self.bg_agents = BackgroundAgentService(self)
         
-        # Project DNA Crawler: Mapeia exaustivamente os projetos do Jhordan
+        # Project DNA Crawler: Mapeia exaustivamente os projetos
         self.crawler = ProjectCrawlerService(self.chat_window.llm_client.manager)
 
-        # Configura observadores (sem iniciar)
-        self.asset_manager.start(observer=self.file_observer)
-        self.organizer.start(observer=self.file_observer)
-        self.bg_agents.start(observer=self.file_observer)
-        
-        # Auto-Organizer: Monitora e organiza downloads via IA
-        self.organizer = AutoOrganizerService(self.chat_window.llm_client)
-        self.organizer.start()
-        
         # Overwatch: Log Watcher & Ghost Programmer
         self.log_watcher = LogWatcherService(
             self.chat_window.llm_client.manager,
@@ -156,100 +150,144 @@ class MainApp(QApplication):
         # Briefing Service
         self.briefing = BriefingService(self.chat_window.llm_client.manager)
         
-        # Sentinela Service (Monitoramento Visual Adaptativo)
+        # Battery Guard (Modo Economico)
+        from core.battery_guard import BatteryGuard
+        self.battery_guard = BatteryGuard(
+            voice_service=self.chat_window.voice_service,
+            hud=self.hud
+        )
+        
+        # Deep Focus Service (Pomodoro)
+        from core.deep_focus_service import DeepFocusService
+        self.deep_focus = DeepFocusService(
+            voice_service=self.chat_window.voice_service,
+            hud=self.hud
+        )
+        
+        # System Health Monitor
+        from core.system_health import SystemHealth
+        self.system_health = SystemHealth(hud=self.hud)
+        
+        # Task Manager
+        from core.task_manager import TaskManager
+        self.task_manager = TaskManager(llm_client=self.chat_window.llm_client)
+        
+        # Sentinela Service
         self.sentinela = SentinelService(self.chat_window.voice_service, self.hud)
         
-        # Services
-        # O Monitor Service analisa a tela periodicamente em busca de eventos importantes
+        # Monitor Service
         self.monitor = MonitorService(
             self.chat_window.llm_client, 
-            self.voice_service_alias if hasattr(self, 'voice_service_alias') else self.chat_window.voice_service,
+            self.chat_window.voice_service,
             self.chat_window.llm_client.memory_client,
             hud=self.hud
         )
-        self.monitor.vision = shared_vision # Injeta a instância única
+        self.monitor.vision = shared_vision
         
-        # Hotkey Handler (Lazy Init)
-        self.hotkey_handler = GlobalHotkeyHandler()
-        self.hotkey_handler.chat_requested.connect(self.chat_window.show_and_activate)
-        self.hotkey_handler.voice_requested.connect(self.on_voice_requested)
-        
+        # Timer de Polling para Hotkeys vindas do SwiftAgent
+        self.swift_hotkey_timer = QTimer()
+        self.swift_hotkey_timer.timeout.connect(self._check_swift_hotkeys)
+        self.swift_hotkey_timer.start(100)
+
         # Tray Icon Setup
         self.setup_tray()
         
-        # Configura callback de status de voz para o HUD
+        # Configura callback de status de voz
         self.chat_window.voice_service.status_callback = lambda state, visible: self.hud.voice_signal.emit(state, visible)
+        self.chat_window.voice_service.start_wake_word_detection(callback=self._on_wake_word)
         
-        # Inicia o modo de escuta (Threads de áudio e coleta), mas sem o loop de Wake Word
-        self.chat_window.voice_service.start_listening_mode()
+        # Conecta VoiceService ao AudioWaveformBar
+        self.hud.connect_voice_service(self.chat_window.voice_service)
         
-        # Sequência de inicialização (Saudação personalizada)
         self.sound.play_system_sound("Hero")
         user_name = os.getenv("USER_NAME", "Senhor")
-        self.chat_window.voice_service.speak(f"Sistemas online, {user_name}. Omniscient carregado.")
+        self.chat_window.voice_service.speak(f"Sistemas online, {user_name}.")
         
-        # ESTABILIDADE PRO: Atraso na carga de serviços pesados para evitar conflito de hardware (SIGTRAP)
-        print("Omniscient: Aguardando estabilização do hardware...")
-        QTimer.singleShot(3000, self._start_delayed_services)
+        print("Omniscient: Sistemas operacionais.")
+        QTimer.singleShot(5000, self._start_delayed_services)
         
-        # Briefing opcional no startup (Saudação baseada na hora - roda em background)
-        threading.Thread(target=self._run_startup_briefing, daemon=True).start()
-        
+        # Briefing de inicialização removido conforme solicitado
+        # threading.Thread(target=self._run_startup_briefing, daemon=True).start()
         print("Omniscient Agent iniciado e pronto!")
 
-    def _start_delayed_services(self):
-        """Inicia serviços que podem causar conflitos de hardware se iniciados em paralelo."""
+    def _check_swift_hotkeys(self):
         try:
-            print("🚀 Iniciando Protocolos de Alta Fidelidade...")
-            
-            # 1. Hotkeys (O mais sensível no macOS)
-            self.hotkey_handler.start()
-            
-            # 2. Visão e Monitoramento (Acionam o Metal)
-            self.delta_vision.start()
-            self.sentinela.start()
-            self.monitor.start()
-            
-            # 3. Observadores de Arquivo e Logs
-            self.file_observer.start()
-            self.log_watcher.start()
-            self.ghost_programmer.start()
-            self.crawler.start_background_crawl()
-            
-            # 4. Serviços de Background
-            self.night_watch.start()
-            self.auto_organizer.start()
-            self.background_agents.start()
-            
-            print("✅ Todos os sistemas operacionais e seguros.")
-        except Exception as e:
-            print(f"Erro ao iniciar serviços tardios: {e}")
+            from core.bridge_service import bridge
+            response = bridge.send_sync({"action": "get_events"})
+            if response and response.get("status") == "ok":
+                events = response.get("events", [])
+                for event in events:
+                    if event == "hotkey_chat":
+                        self.chat_window.show_and_activate()
+                    elif event == "hotkey_voice":
+                        self.on_voice_requested()
+        except Exception:
+            pass
+
+    def _start_delayed_services(self):
+        def _safe_init():
+            try:
+                print("🚀 Iniciando Protocolos de Alta Fidelidade (Sequencial)...")
+                
+                print("   [1/8] Sincronizando Hotkeys Nativas...")
+                time.sleep(1.0)
+                
+                print("   [2/8] Ativando Delta-Vision...")
+                self.delta_vision.start()
+                time.sleep(1.5)
+                
+                print("   [3/8] Ativando Sentinela...")
+                self.sentinela.start()
+                time.sleep(1.0)
+                
+                print("   [4/8] Ativando Monitor de Sistema...")
+                self.monitor.start()
+                time.sleep(1.0)
+                
+                print("   [5/8] Ativando Log Watcher & Ghost Programmer...")
+                self.log_watcher.start()
+                self.ghost_programmer.start()
+                self.file_observer.start()
+                time.sleep(1.0)
+                
+                print("   [6/8] Ativando Project Crawler...")
+                self.crawler.start_background_crawl()
+                time.sleep(1.0)
+                
+                print("   [7/8] Ativando Night Watch...")
+                self.night_watch.start()
+                
+                print("   [7.5/8] Ativando Battery Guard...")
+                self.battery_guard.start_monitoring()
+                
+                print("   [8/8] Ativando Auto-Organizer & Background Agents...")
+                # Asset Manager e Auto-Organizer compartilham a pasta Downloads
+                # Para evitar RuntimeError no Watchdog, agendamos apenas uma vez por path
+                self.asset_manager.start(observer=self.file_observer)
+                # O organizer só agenda se o path já não estiver sendo monitorado pelo observer ou se usarmos caminhos diferentes
+                # No caso atual, vamos apenas garantir que a inicialização não quebre o app
+                try:
+                    self.organizer.start(observer=self.file_observer)
+                except Exception as e:
+                    print(f"   Aviso: Auto-Organizer compartilhou observador: {e}")
+                
+                self.bg_agents.start(observer=self.file_observer)
+                
+                print("✅ Todos os sistemas operacionais e seguros.")
+            except Exception as e:
+                print(f"❌ Erro crítico na inicialização sequencial: {e}")
+
+        threading.Thread(target=_safe_init, daemon=True).start()
 
     def _run_startup_briefing(self):
-        """Gera um briefing proativo baseado em contexto real (Calendário, E-mail, Memória)."""
         print("Preparando briefing proativo...")
-        time.sleep(4) # Aguarda sistemas estabilizarem
-        
+        time.sleep(4)
         try:
-            # 1. Coleta contexto real
             cal_events = ExecutionService.get_calendar_events()
             unread_mails = ExecutionService.mail_unread(count=3)
             system_info = ExecutionService.get_system_info()
             
-            prompt = f"""Gere um briefing de saudação curto e elegante para o JHORDAN.
-            CONTEXTO REAL:
-            - Calendário: {cal_events}
-            - E-mails não lidos: {unread_mails}
-            - Sistema: {system_info}
-            
-            REGRAS:
-            - Seja muito breve (máximo 3 frases).
-            - Não diga "bom dia" se for noite (veja a hora do sistema).
-            - Mencione algo relevante do calendário ou e-mail se houver.
-            - Termine com o status da bateria.
-            """
-            
-            # Gera o briefing usando o cliente de chat para ter o tom do Omniscient
+            prompt = f"Gere um briefing de saudação curto e elegante para o JHORDAN. CONTEXTO: {cal_events}, {unread_mails}, {system_info}. Regras: Breve, PT-BR."
             briefing_text = self.chat_window.llm_client.chat([{"role": "user", "content": prompt}])
             
             if briefing_text and "Erro" not in briefing_text:
@@ -259,7 +297,6 @@ class MainApp(QApplication):
             print(f"Erro ao gerar briefing proativo: {e}")
 
     def _update_context_wall(self):
-        """Monitora o arquivo ativo e atualiza o HUD."""
         try:
             file_path = ExecutionService.get_vscode_current_file()
             if file_path and file_path != "unknown":
@@ -270,38 +307,21 @@ class MainApp(QApplication):
             print(f"Erro ao atualizar context wall: {e}")
 
     def _on_terminal_error(self, payload):
-        """Chamado quando um comando no terminal falha. Agora aprende com o erro."""
         command = payload.get("command", "")
         exit_code = payload.get("exit_code", "")
         output = payload.get("output", "")
-        
-        # 1. Verifica se já aprendemos sobre isso
         from core.error_learning import error_learner
         prior_knowledge = error_learner.check_for_prior_errors(command)
-        
-        prompt = f"""Você é o JARVIS. O usuário executou um comando que FALHOU no terminal.
-COMANDO: {command}
-CÓDIGO DE SAÍDA: {exit_code}
-OUTPUT: {output}
-{f'CONHECIMENTO PRÉVIO: {prior_knowledge}' if prior_knowledge else ''}
-
-SUA TAREFA:
-Explique rapidamente por que falhou e sugira o comando correto para consertar.
-Seja extremamente breve (máximo 1 frase).
-"""
+        prompt = f"JARVIS: Comando {command} falhou ({exit_code}). Explique brevemente."
         try:
             suggestion = self.chat_window.llm_client.manager.generate_command(prompt, system_context="TERMINAL_OVERWATCH")
-            self.hud.display_signal.emit(f"FALHA NO TERMINAL: {suggestion}", "PROACTIVE", 7000)
+            self.hud.display_signal.emit(f"FALHA: {suggestion}", "PROACTIVE", 7000)
             self.chat_window.voice_service.speak(f"Senhor, o comando {command.split()[0]} falhou. {suggestion}")
-            
-            # 2. Salva o novo conhecimento
             error_learner.learn_from_error(command, output or f"Exit code {exit_code}", suggestion)
-            
         except Exception as e:
             print(f"Erro ao processar erro do terminal: {e}")
 
     def _apply_ghost_fix(self, file_path, old_text, new_text):
-        """Aplica a correção sugerida pelo Ghost Programmer."""
         try:
             content = ExecutionService.read_file(file_path)
             if old_text in content:
@@ -315,58 +335,54 @@ Seja extremamente breve (máximo 1 frase).
             print(f"Erro ao aplicar Ghost Fix: {e}")
 
     def _ensure_swift_agent(self):
-        """Verifica se o binário Swift está rodando, se não, inicia."""
+        """Verifica se o binário Swift está rodando, se não, inicia (ou reinicia se for antigo)."""
         swift_name = "Omniscient"
-        for proc in psutil.process_iter(['name']):
-            if proc.info['name'] == swift_name:
-                return
+        print(f"--- [STARTUP] Verificando {swift_name} nativo ---")
+        
+        # Mata qualquer instância órfã ou antiga
+        try:
+            subprocess.run(["killall", swift_name], capture_output=True)
+            time.sleep(0.5)
+        except Exception:
+            pass
 
-        print("Swift Executor não encontrado. Iniciando...")
-        # Procura o binário no bundle ou no local de desenvolvimento
-        bundle_path = resource_path("Omniscient")
-        dev_path_debug = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SwiftAgent/.build/arm64-apple-macosx/debug/Omniscient")
+        # Procura o binário
         dev_path_release = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SwiftAgent/.build/arm64-apple-macosx/release/Omniscient")
+        bundle_path = resource_path("Omniscient")
 
-        # Prioridade: Bundle > Release > Debug
-        path = None
-        if os.path.exists(bundle_path): path = bundle_path
-        elif os.path.exists(dev_path_release): path = dev_path_release
-        elif os.path.exists(dev_path_debug): path = dev_path_debug
-
-        if path:
+        path = bundle_path if os.path.exists(bundle_path) else dev_path_release
+        
+        if os.path.exists(path):
+            print(f"   [Nativo] Executável encontrado em: {path}")
             try:
-                subprocess.Popen([path], start_new_session=True)
-                time.sleep(2) # Aguarda o socket ser criado
+                # Inicia o processo nativo e captura logs em tempo real
+                proc = subprocess.Popen([path], start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                
+                def _log_swift():
+                    print("   [Nativo] Listener de logs Swift ativo.")
+                    for line in iter(proc.stdout.readline, ""):
+                        # Repassa logs de debug do Swift para o terminal Python
+                        if "DEBUG" in line:
+                            print(f"   [Nativo] {line.strip()}")
+                
+                threading.Thread(target=_log_swift, daemon=True).start()
+                time.sleep(2)
+                print("   [Nativo] Ponte de comunicação estabelecida.")
             except Exception as e:
-                print(f"Erro ao iniciar Swift Executor em {path}: {e}")
+                print(f"   [ERRO] Falha ao iniciar binário Swift: {e}")
         else:
-            print(f"Binário Swift não encontrado em {path}")
-
-    def on_monitor_alert(self, message):
-
-        """Chamado quando o Sentinela detecta algo importante na tela."""
-        # Usa sinal para garantir thread-safety com a UI
-        self.sound.notify()
-        self.hud.display_signal.emit(f"SENTINELA: {message}", "PROACTIVE", 5000)
-        self.chat_window.append_to_history(message, "system")
+            print(f"   [ERRO] Binário nativo NÃO encontrado em: {path}")
+            print("   Dica: Rode 'cd SwiftAgent && swift build -c release' primeiro.")
 
     def on_voice_requested(self):
-        """Chamado via atalho Cmd+Shift+Enter. Alterna entre ouvir uma vez ou modo contínuo."""
-        # Se o agente estiver falando, apenas interrompe o áudio
         if self.chat_window.voice_service.is_speaking:
-            print("Atalho de voz acionado. Interrompendo fala...")
             self.chat_window.voice_service.stop_speaking()
             return
 
-        # Alterna o estado do modo contínuo
         is_active = self.chat_window.voice_service.toggle_continuous_mode()
-        
         if is_active:
             self.hud.display_signal.emit("MODO CONTÍNUO: ATIVADO", "LISTENING", 3000)
             self.sound.wake()
-            self.sound.play_voice_start()
-            
-            # Só inicia a thread se ela já não estiver rodando
             if not getattr(self, "_voice_cycle_active", False):
                 threading.Thread(target=self._acquire_and_process_command, daemon=True).start()
         else:
@@ -374,110 +390,209 @@ Seja extremamente breve (máximo 1 frase).
             self.chat_window.voice_service.abort_listen = True
             self.sound.play_system_sound("Tink")
 
+    def _on_wake_word(self):
+        """Callback chamado quando wake word é detectada pelo microfone."""
+        # Se já está no loop do atalho, não duplica
+        if getattr(self, "_voice_cycle_active", False):
+            return
+        def _process():
+            self._voice_cycle_active = True
+            try:
+                self.hud.voice_signal.emit("LISTENING", True)
+                self._overlay_show()
+                text = self.chat_window.voice_service.listen(continuous_mode=True)
+                if text and len(text.strip()) > 1:
+                    clean = re.sub(r'[^\w\s]', '', text.lower()).strip()
+                    wake_words = ["omni", "omniscient", "omniciente", "bagual", "hominy"]
+                    for kw in wake_words:
+                        clean = re.sub(r'^' + re.escape(kw) + r'\s*', '', clean).strip()
+                    if clean:
+                        print(f"DEBUG WAKE: Comando: '{clean}'")
+                        self._overlay_transcript(clean)
+                        self._handle_command_cycle_with_overlay(clean)
+                        # Cooldown: esperar TTS e overlay finalizarem antes de retomar wake word
+                        while self.chat_window.voice_service.is_speaking:
+                            time.sleep(0.1)
+                        # Setar cooldown no voice_service para prevenir re-trigger
+                        self.chat_window.voice_service.cooldown_until = time.time() + 3.0
+                        time.sleep(2.0)
+                    else:
+                        self._overlay_hide()
+                else:
+                    self._overlay_hide()
+            finally:
+                self._voice_cycle_active = False
+                self.hud.voice_signal.emit("LISTENING", False)
+        threading.Thread(target=_process, daemon=True).start()
+
     def _acquire_and_process_command(self):
-        """Loop principal de escuta. Mantém-se ativo enquanto o modo contínuo estiver ON."""
         self._voice_cycle_active = True
+        wake_words = ["omni", "omniscient", "omniciente", "bagual", "hominy"]
+        falsepositives = ["menino", "harmonia", "dominó", "dominio", "comigo", "combinou"]
         try:
             while self.chat_window.voice_service.is_continuous_mode:
-                # Se o agente começou a falar no meio do loop, espera ele terminar
                 while self.chat_window.voice_service.is_speaking:
                     time.sleep(0.1)
-
                 self.hud.voice_signal.emit("LISTENING", True)
-                
-                # Escuta o próximo comando (usando modo contínuo para evitar pre-buffer do wake word)
                 text = self.chat_window.voice_service.listen(continuous_mode=True)
-                
                 if text and len(text.strip()) > 1:
-                    # Processa o comando e gera a resposta (que dispara o speak)
-                    self._handle_command_cycle(text)
-                    # Dá um pequeno respiro para o processamento terminar e o speak começar
+                    clean = re.sub(r'[^\w\s]', '', text.lower()).strip()
+                    words_clean = clean.split()
+                    
+                    # Verificar se NÃO é falso positivo
+                    is_falsepositive = any(fp in clean for fp in falsepositives)
+                    
+                    # Wake word deve estar no INÍCIO (primeira palavra)
+                    has_wake = False
+                    if not is_falsepositive and words_clean:
+                        for kw in wake_words:
+                            if words_clean[0] == kw:
+                                has_wake = True
+                                break
+                    
+                    if has_wake:
+                        # Verificar voiceprint ANTES de processar
+                        voice_service = self.chat_window.voice_service
+                        if voice_service.voiceprint.is_registered():
+                            # Capturar áudio atual para identificação
+                            audio_data = None
+                            with voice_service.audio_lock:
+                                if len(voice_service.wake_word_window) >= voice_service.RATE:
+                                    audio_data = np.array(voice_service.wake_word_window, dtype=np.float32)
+                            
+                            if audio_data is not None:
+                                is_user, similarity, label = voice_service.identify_speaker(audio_data)
+                                if not is_user:
+                                    print(f"Voiceprint: Voz desconhecida (sim={similarity:.2f}). Ignorando.")
+                                    time.sleep(0.2)
+                                    continue
+                        
+                        # Remove a wake word do texto antes de enviar ao LLM
+                        for kw in wake_words:
+                            clean = re.sub(r'\b' + re.escape(kw) + r'\b', '', clean).strip()
+                    else:
+                        # Sem wake word explícita = ignorar
+                        time.sleep(0.2)
+                        continue
+                    if not clean:
+                        time.sleep(0.2)
+                        continue
+                    print(f"DEBUG CICLO: Comando final: '{clean}'")
+                    # Mostrar overlay e processar
+                    self._overlay_show()
+                    self._overlay_transcript(clean)
+                    self._handle_command_cycle_with_overlay(clean)
                     time.sleep(0.8)
                 else:
-                    # Se não houve áudio, apenas aguarda um pouco para não fritar a CPU
                     time.sleep(0.2)
-                    
         finally:
             self._voice_cycle_active = False
             self.hud.voice_signal.emit("LISTENING", False)
 
     def _handle_command_cycle(self, text):
-        """Processa um comando e abre a janela de conversa contínua."""
         self.hud.display_signal.emit("Processando...", "THINKING", 0)
-        self.hud.voice_signal.emit("LISTENING", False)
-        
-        # Escuta o comando do usuário (usando o buffer contínuo)
-        text = self.chat_window.voice_service.listen()
-        
-        if text and len(text.strip()) > 1:
-            # Processa o comando inicial
-            self._handle_command_cycle(text)
-        else:
-            self.hud.display_signal.emit("...", "IDLE", 1)
-            self.hud.voice_signal.emit("LISTENING", False)
-            print("Nenhum comando capturado após wake word.")
-
-    def _handle_command_cycle(self, text):
-        """Processa um comando e abre a janela de conversa contínua."""
-        self.hud.display_signal.emit("Processando...", "THINKING", 0)
-        self.hud.voice_signal.emit("LISTENING", False)
-        
-        print(f"Comando de voz: {text}")
-        
-        # Como process_silent_command é assíncrono (thread separada no chat_window),
-        # precisamos aguardar ele terminar para reabrir o microfone.
-        # Para simplificar e manter a fluidez, usamos uma abordagem de callback
-        # ou chamamos a lógica de LLM diretamente, mas vamos aguardar o VoiceService terminar de falar.
-        
         self.chat_window.process_silent_command(text)
-        self.hud.display_signal.emit("Pronto.", "SUCCESS", 2000)
-        
-        # Loop de Conversa Contínua (Follow-up)
-        # Aguarda o agente começar a falar (se for o caso)
-        time.sleep(1) 
-        
-        # Aguarda ele terminar de falar
+        while getattr(self.chat_window, 'is_processing', False):
+            time.sleep(0.1)
         while self.chat_window.voice_service.is_speaking:
             time.sleep(0.1)
-            
-        print("Abrindo janela de Conversa Contínua (Follow-up)...")
-        self.hud.display_signal.emit("Ouvindo... (Contínuo)", "LISTENING", 0)
-        self.hud.voice_signal.emit("LISTENING", True)
+
+    def _handle_command_cycle_with_overlay(self, text):
+        """Processa comando com overlay Siri-like."""
+        self.hud.display_signal.emit("Processando...", "THINKING", 0)
         
-        # Escuta em modo contínuo (sem pre-buffer da wake word)
-        follow_up_text = self.chat_window.voice_service.listen(continuous_mode=True)
+        def _process():
+            try:
+                # Adicionar mensagem do usuário ao histórico
+                self.chat_window._safe_append_to_history("VOCÊ (Voz)", text)
+                
+                print(f"DEBUG OVERLAY: Chamando LLM com {len(self.chat_window.chat_history)} mensagens...")
+                response = self.chat_window.llm_client.chat(self.chat_window.chat_history)
+                print(f"DEBUG OVERLAY: Resposta do LLM: '{response[:100] if response else 'VAZIA'}'")
+                
+                if response:
+                    self._overlay_response(response)
+                    
+                    if not response.startswith("[{"):
+                        print(f"DEBUG OVERLAY: Iniciando TTS...")
+                        self.chat_window.voice_service.speak(response)
+                        print(f"DEBUG OVERLAY: is_speaking={self.chat_window.voice_service.is_speaking}")
+                        while self.chat_window.voice_service.is_speaking:
+                            time.sleep(0.1)
+                        print(f"DEBUG OVERLAY: TTS finalizado")
+                    else:
+                        print(f"DEBUG OVERLAY: Resposta ignorada para TTS (JSON)")
+                
+                time.sleep(2.0)
+                self._overlay_hide()
+                
+            except Exception as e:
+                print(f"DEBUG OVERLAY: ERRO: {e}")
+                import traceback
+                traceback.print_exc()
+                self._overlay_error(f"Erro: {e}")
+                time.sleep(3.0)
+                self._overlay_hide()
         
-        if follow_up_text and len(follow_up_text.strip()) > 1:
-            # Se o usuário falou algo, entra no loop novamente
-            self._handle_command_cycle(follow_up_text)
-        else:
-            # Se ficou em silêncio, encerra o ciclo e volta a dormir
-            self.hud.display_signal.emit("Hibernando.", "IDLE", 2000)
-            self.hud.voice_signal.emit("LISTENING", False)
-            print("Fim do ciclo de voz. Aguardando wake word.")
+        threading.Thread(target=_process, daemon=True).start()
+
+    # Overlay helper methods
+    def _overlay_show(self):
+        """Mostra o overlay Siri."""
+        try:
+            from core.bridge_service import bridge
+            print(f"DEBUG OVERLAY: Enviando overlay_show...")
+            result = bridge.overlay_show()
+            print(f"DEBUG OVERLAY: overlay_show result: {result}")
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao mostrar overlay: {e}")
+
+    def _overlay_hide(self):
+        """Esconde o overlay Siri."""
+        try:
+            from core.bridge_service import bridge
+            bridge.overlay_hide()
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao esconder overlay: {e}")
+
+    def _overlay_transcript(self, text: str):
+        """Envia transcrição para o overlay."""
+        try:
+            from core.bridge_service import bridge
+            bridge.overlay_transcript(text)
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao enviar transcrição: {e}")
+
+    def _overlay_response(self, text: str):
+        """Envia resposta para o overlay."""
+        try:
+            from core.bridge_service import bridge
+            print(f"DEBUG OVERLAY: Enviando overlay_response...")
+            result = bridge.overlay_response(text)
+            print(f"DEBUG OVERLAY: overlay_response result: {result}")
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao enviar resposta: {e}")
+
+    def _overlay_error(self, text: str):
+        """Mostra erro no overlay."""
+        try:
+            from core.bridge_service import bridge
+            bridge.overlay_error(text)
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao enviar erro: {e}")
 
     def setup_tray(self):
-        # Tenta carregar o ícone, se não existir usa um padrão do sistema
         icon_path = resource_path("src/ui/icon.png")
-        if sys.platform == "darwin":
-            self.tray_icon = QSystemTrayIcon(QIcon(icon_path), self)
-        else:
-            self.tray_icon = QSystemTrayIcon(self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon), self)
-            
+        self.tray_icon = QSystemTrayIcon(QIcon(icon_path), self) if os.path.exists(icon_path) else QSystemTrayIcon(self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon), self)
         self.tray_icon.setToolTip("Omniscient Agent")
-        self.chat_window.set_tray_icon(self.tray_icon)
-        
         menu = QMenu()
         show_action = QAction("Abrir Chat", self)
         show_action.triggered.connect(self.chat_window.show_and_activate)
-        
         quit_action = QAction("Sair", self)
         quit_action.triggered.connect(self.quit)
-        
         menu.addAction(show_action)
         menu.addSeparator()
         menu.addAction(quit_action)
-        
         self.tray_icon.setContextMenu(menu)
         self.tray_icon.show()
 

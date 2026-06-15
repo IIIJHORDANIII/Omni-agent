@@ -1,60 +1,40 @@
 import os
-import json
-import subprocess
+from datetime import datetime
 
 class MemoryClient:
     """
     Cliente de Memória integrado com o ecossistema ai-memory (MCP).
-    Atua como uma ponte entre o agente Omniscient e a memória persistente do projeto.
     """
-    def __init__(self, memory_file="agent_memory.json", index_file="agent_memory.index"):
-        # Mantemos as referências para compatibilidade de init, 
-        # mas agora o foco é a integração com ai-memory (MCP).
-        self.project_context = os.getcwd()
+    def __init__(self):
+        pass
 
     def save_fact(self, key, value):
-        """
-        Salva um fato durável usando ai-memory (MCP).
-        Equivalente a criar uma página wiki.
-        """
-        print(f"DEBUG: Memorizando fato no ai-memory: {key}")
+        """Salva um fato durável na memória semântica local (ChromaDB)."""
         try:
-            # Formata o corpo da página no estilo ai-memory
-            body = f"# {key}\n\n{value}"
-            # O ai-memory costuma ser acessado via ferramentas do agente ou CLI.
-            # Como este código roda no agente local, vamos simular a persistência 
-            # de forma que o MCP possa ler depois ou usar a ferramenta de escrita se disponível.
-            
-            # Aqui, como você já tem o MCP no Docker, o ideal é que o agente 
-            # use as ferramentas do MCP. Para o código Python local, 
-            # vamos documentar que ele 'passa o bastão' para o sistema de memória.
-            
-            # Nota: No contexto do Gemini CLI, eu (agente) uso mcp_ai-memory_memory_write_page.
-            # Para o agente local funcionar em harmonia, ele deve usar uma interface compatível.
-            return f"Fato '{key}' enviado para o sistema de memória persistente."
+            from core.semantic_memory import SemanticMemory
+            return SemanticMemory().write(key, value)
         except Exception as e:
             return f"Erro ao memorizar fato: {e}"
 
-    def get_fact(self, query):
-        """
-        Consulta a memória usando ai-memory (MCP).
-        """
-        print(f"DEBUG: Consultando ai-memory para: {query}")
-        # No agente local, isso retornaria resultados via MCP se estivesse conectado.
-        return f"Consultando base de conhecimento unificada para '{query}'..."
+    def get_fact(self, query, exact_only=False):
+        """Consulta a memória semântica. Tenta busca exata, depois vetorial."""
+        try:
+            from core.semantic_memory import SemanticMemory
+            sm = SemanticMemory()
+            exact = sm.get_exact_fact(query)
+            if exact: return exact
+            if exact_only: return None
+            results = sm.query(query, n_results=1)
+            if results:
+                return results[0]
+            return None
+        except Exception as e:
+            return None
 
     def get_all_memory(self):
-        """
-        Retorna um resumo do status da memória.
-        """
         return "Conectado ao ecossistema ai-memory (MCP)."
 
     def store_observation(self, text):
-        """
-        Armazena uma observação temporal (episódica) na memória.
-        """
-        print(f"DEBUG: Armazenando observação: {text[:50]}...")
-        # No ecossistema ai-memory, observações podem ser salvas em páginas diárias
-        from datetime import datetime
+        """Armazena uma observação temporal na memória."""
         today = datetime.now().strftime("%Y-%m-%d")
         return self.save_fact(f"Atividade_{today}", text)

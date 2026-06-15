@@ -1,21 +1,19 @@
+import math
+import time
+import numpy as np
 from PyQt6.QtWidgets import QWidget, QLabel, QHBoxLayout, QFrame, QVBoxLayout
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtGui import QPainter, QColor, QFont, QPen
 from core.system_monitor import SystemMonitor
-import sys
 
-# Tenta importar as bibliotecas nativas do macOS para o efeito de Glass/Vibrancy
 try:
-    from AppKit import NSVisualEffectView, NSVisualEffectMaterial, NSVisualEffectState, NSViewWidthSizable, NSViewHeightSizable, NSApp, NSAppearance
-    import objc
-    from ctypes import c_void_p
+    from AppKit import NSVisualEffectView, NSVisualEffectMaterial, NSVisualEffectState
     HAS_NATIVE_BLUR = True
-except ImportError as e:
-    print(f"DEBUG: AppKit/objc import failed: {e}")
+except ImportError:
     HAS_NATIVE_BLUR = False
 
-class VoiceIndicator(QWidget):
-    """Círculo no canto superior direito para indicação de voz/fala."""
+class AudioWaveformBar(QWidget):
+    """Tarja de áudio animada e compacta."""
     def __init__(self):
         super().__init__()
         self.setWindowFlags(
@@ -26,40 +24,87 @@ class VoiceIndicator(QWidget):
             Qt.WindowType.WindowTransparentForInput
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        self.setFixedSize(100, 100)
+        self.setFixedSize(180, 28)
         
-        layout = QVBoxLayout(self)
-        self.circle = QFrame()
-        self.circle.setFixedSize(40, 40)
-        # Estilo JARVIS: Brilho externo e borda neon
-        self.circle.setStyleSheet("""
-            background-color: rgba(0, 212, 255, 30);
-            border: 2px solid #00d4ff;
-            border-radius: 20px;
-        """)
-        layout.addWidget(self.circle, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.level = 0.0
+        self.target_level = 0.0
+        self.is_listening = False
+        self.status_text = ""
+        self.voice_service = None
+        
+        self.anim_timer = QTimer()
+        self.anim_timer.timeout.connect(self._animate)
+        self.anim_timer.start(33)
+        
+        self.audio_timer = QTimer()
+        self.audio_timer.timeout.connect(self._read_audio)
+        self.audio_timer.start(50)
+        
         self.hide()
-
+    
+    def start_monitoring(self, voice_service):
+        self.voice_service = voice_service
+    
+    def _read_audio(self):
+        if not self.voice_service or self.voice_service.audio_buffer.empty():
+            self.target_level *= 0.8
+            return
+        try:
+            chunk = self.voice_service.audio_buffer.get_nowait()
+            audio_np = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+            energy = min(1.0, np.sqrt(np.mean(audio_np**2)) * 15)
+            self.target_level = energy
+        except:
+            pass
+    
+    def _animate(self):
+        self.level += (self.target_level - self.level) * 0.3
+        if self.level > 0.01:
+            self.update()
+    
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        p.setBrush(QColor(15, 15, 25, 220))
+        p.setPen(QPen(QColor(0, 212, 255, 60), 1))
+        p.drawRoundedRect(0, 0, self.width(), 18, 6, 6)
+        
+        bars = 22
+        bar_w = 3
+        gap = 4
+        total = bars * (bar_w + gap)
+        start_x = (self.width() - total) // 2
+        
+        for i in range(bars):
+            phase = math.sin(i * 0.4 + time.time() * 4) * 0.5 + 0.5
+            h = max(2, int(self.level * 14 * phase))
+            
+            x = start_x + i * (bar_w + gap)
+            y = 9 - h // 2
+            
+            if self.is_listening:
+                c = QColor(255, 59, 48, 180)
+            else:
+                c = QColor(0, 212, 255, 180)
+            
+            p.setBrush(c)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(x, y, bar_w, h, 1, 1)
+        
+        if self.status_text:
+            p.setPen(QColor(255, 255, 255, 120))
+            p.setFont(QFont("Avenir Next", 7))
+            p.drawText(0, 19, self.width(), 9, Qt.AlignmentFlag.AlignCenter, self.status_text)
+        
+        p.end()
+    
     def show_state(self, state="LISTENING"):
-        colors = {
-            "LISTENING": "rgba(255, 59, 48, 100)", # Vermelho suave
-            "SPEAKING": "rgba(0, 212, 255, 100)"   # Azul suave
-        }
-        border_colors = {"LISTENING": "#ff3b30", "SPEAKING": "#00d4ff"}
+        self.is_listening = (state == "LISTENING")
+        self.status_text = "gravando..." if state == "LISTENING" else "falando..."
         
-        color = colors.get(state, "rgba(0, 212, 255, 100)")
-        border = border_colors.get(state, "#00d4ff")
-        
-        self.circle.setStyleSheet(f"""
-            background-color: {color};
-            border: 3px solid {border};
-            border-radius: 20px;
-        """)
-        
-        # Posiciona no canto superior direito com margem
         screen = self.screen().geometry()
-        self.move(screen.width() - 120, 60)
+        self.move(screen.width() - 200, 55)
         self.show()
 
 class HUDOverlay(QWidget):
@@ -70,7 +115,6 @@ class HUDOverlay(QWidget):
 
     def __init__(self):
         super().__init__()
-        print(f"DEBUG: HUD init - HAS_NATIVE_BLUR: {HAS_NATIVE_BLUR}")
         self.is_dark = True 
         
         # Timer para esconder o HUD com segurança
@@ -78,14 +122,18 @@ class HUDOverlay(QWidget):
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
         
-        # Voice Indicator Popup
-        self.voice_indicator = VoiceIndicator()
+        # Voice Indicator (AudioWaveformBar)
+        self.voice_indicator = AudioWaveformBar()
         
         self.display_signal.connect(self.update_hud)
         self.context_signal.connect(self.update_context_wall)
         self.voice_signal.connect(self._handle_voice_indicator)
         
         self.init_ui()
+    
+    def connect_voice_service(self, voice_service):
+        """Conecta o VoiceService ao indicador de áudio."""
+        self.voice_indicator.start_monitoring(voice_service)
 
     def _handle_voice_indicator(self, state, visible):
         if visible:
@@ -165,7 +213,6 @@ class HUDOverlay(QWidget):
         
         self.context_frame.hide()
         self.hide()
-        QTimer.singleShot(200, self.apply_vibrancy)
 
     def update_hud(self, text, state="IDLE", duration=3000):
         self.hide_timer.stop() # Cancela qualquer fechamento pendente
@@ -203,9 +250,13 @@ class HUDOverlay(QWidget):
             self.context_frame.hide()
             return
             
-        self.file_label.setText(f"FILE: {data['file'][:15]}...")
-        self.linear_label.setText(f"LIN: {data['linear'][:20]}...")
-        self.github_label.setText(f"GIT: {data['github'][:20]}...")
+        file_name = (data.get('file') or '--')[:15]
+        linear_info = (data.get('linear') or '--')[:20]
+        github_info = (data.get('github') or '--')[:20]
+        
+        self.file_label.setText(f"FILE: {file_name}")
+        self.linear_label.setText(f"LIN: {linear_info}")
+        self.github_label.setText(f"GIT: {github_info}")
         self.context_frame.show()
         self.recenter()
         self.show()

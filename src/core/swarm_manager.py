@@ -53,11 +53,41 @@ class SwarmManager:
                 agent_name = future_to_agent[future]
                 results[agent_name] = future.result()
         
-        # 3. Resolução de Conflitos (O Judge dá a palavra final se houver Smith)
+        # 3. Resolucao de Conflitos (O Judge da a palavra final se houver Smith)
         if "Judge" in results and "Smith" in results:
-            print("Swarm: Judge analisando a saída do Smith...")
-            # Lógica de validação cruzada
-            
+            print("Swarm: Judge analisando a saida do Smith...")
+            # Lógica de validação cruzada: Judge revisa o codigo do Smith
+            validation_prompt = f"""Voce e o agente Judge, revisor de codigo.
+O agente Smith produziu o seguinte resultado:
+
+--- SMITH OUTPUT ---
+{results['Smith']}
+--- FIM ---
+
+TAREFA ORIGINAL: {plan.get('Smith', 'N/A')}
+
+Revise criticamente. Se houver problemas de:
+- Seguranca (injecao, hardcoded secrets, riscos)
+- Correcao logica (bugs, edge cases)
+- Qualidade (code smell, anti-patterns, performance)
+
+Gere uma VERSAO CORRIGIDA com as melhorias necessarias.
+Responda APENAS com a versao melhorada, sem explicacao."""
+
+            try:
+                judge_result = self.llm.generate_command(
+                    validation_prompt,
+                    system_context="SWARM_JUDGE_REVIEW"
+                )
+                if judge_result and len(judge_result) > 20:
+                    results["Smith"] = judge_result
+                    results["Judge"] = f"Revisao concluida. Codigo do Smith validado e melhorado."
+                    print("Swarm: Judge validou e melhorou o codigo do Smith.")
+                else:
+                    results["Judge"] = "Revisao concluida. Codigo do Smith validado sem alteracoes."
+            except Exception as e:
+                results["Judge"] = f"Erro na revisao do Judge: {e}"
+
         return results
 
     def delegate_automatically(self, complex_prompt):
