@@ -77,9 +77,6 @@ class HUDOverlay(QWidget):
         self.container.setObjectName("HudContainer")
         self.container.setStyleSheet(_tahoe_style())
 
-        if HAS_NATIVE_BLUR:
-            self._apply_vibrancy(self.container)
-
         inner = QVBoxLayout(self.container)
         inner.setContentsMargins(18, 14, 18, 14)
         inner.setSpacing(10)

@@ -206,26 +206,56 @@ class MainApp(QApplication):
         try:
             print("🚀 Iniciando Protocolos de Alta Fidelidade...")
             
-            # 1. Hotkeys (O mais sensível no macOS)
-            self.hotkey_handler.start()
+            # 1. Hotkeys
+            try:
+                self.hotkey_handler.start()
+            except Exception as e:
+                print(f"⚠️  Hotkeys: {e}")
             
-            # 2. Visão e Monitoramento (Acionam o Metal)
-            self.delta_vision.start()
-            self.sentinela.start()
-            self.monitor.start()
+            # 2. Monitor (sem visão)
+            try:
+                self.monitor.start()
+            except Exception as e:
+                print(f"⚠️  Monitor: {e}")
             
             # 3. Observadores de Arquivo e Logs
-            self.file_observer.start()
-            self.log_watcher.start()
-            self.ghost_programmer.start()
-            self.crawler.start_background_crawl()
+            try:
+                self.file_observer.start()
+            except Exception as e:
+                print(f"⚠️  File observer: {e}")
+            try:
+                self.log_watcher.start()
+            except Exception as e:
+                print(f"⚠️  Log watcher: {e}")
+            try:
+                self.ghost_programmer.start()
+            except Exception as e:
+                print(f"⚠️  Ghost programmer: {e}")
+            try:
+                self.crawler.start_background_crawl()
+            except Exception as e:
+                print(f"⚠️  Crawler: {e}")
             
             # 4. Serviços de Background
-            self.night_watch.start()
-            self.auto_organizer.start()
-            self.background_agents.start()
+            try:
+                self.night_watch.start()
+            except Exception as e:
+                print(f"⚠️  Night watch: {e}")
             
-            print("✅ Todos os sistemas operacionais e seguros.")
+            print("✅ Sistemas base operacionais.")
+            
+            # 5. Visão (carrega modelo MLX — pode causar SIGTRAP)
+            # Inicia em thread separada para não derrubar o app
+            def _safe_start_vision():
+                try:
+                    self.delta_vision.start()
+                    self.sentinela.start()
+                    print("✅ Visão ativa.")
+                except Exception as e:
+                    print(f"⚠️  Visão desabilitada: {e}")
+            
+            threading.Thread(target=_safe_start_vision, daemon=True).start()
+            
         except Exception as e:
             print(f"Erro ao iniciar serviços tardios: {e}")
 

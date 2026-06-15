@@ -9,6 +9,23 @@ class NightWatch:
     """
     def __init__(self, llm_manager):
         self.llm = llm_manager
+        self.running = False
+
+    def start(self):
+        """Inicia o Night Watch em background."""
+        if self.running: return
+        self.running = True
+        import threading
+        threading.Thread(target=self._loop, daemon=True).start()
+        print("Night Watch: Monitoramento noturno ativo.")
+
+    def _loop(self):
+        while self.running:
+            time.sleep(3600)  # Checa a cada hora
+            try:
+                self.run_nightly_patrol()
+            except Exception as e:
+                print(f"Night Watch erro: {e}")
 
     def run_nightly_patrol(self):
         """Executa a patrulha noturna: testes e correções."""

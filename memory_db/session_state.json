@@ -1,0 +1,15 @@
+{
+    "last_active": 1781564497.416758,
+    "messages": [
+        {
+            "role": "user",
+            "content": "abre o notas"
+        },
+        {
+            "role": "assistant",
+            "content": "Pronto, JHORDAN! O **Notas** j\u00e1 est\u00e1 aberto a\u00ed na sua m\u00e1quina. \ud83d\ude80 Quer que eu crie uma nota nova ou fa\u00e7a alguma busca espec\u00edfica dentro do app?"
+        }
+    ],
+    "active_tasks": [],
+    "current_skill": null
+}

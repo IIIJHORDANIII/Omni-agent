@@ -49,13 +49,12 @@ class VisionService:
         mx.set_default_stream(mx.default_stream(mx.gpu))
 
     def _ensure_model_loaded(self):
-        """Carrega o modelo de visão apenas quando necessário."""
+        """Carrega o modelo de visão apenas quando necessário (lazy load)."""
         from core.model_arbiter import arbiter
         if arbiter.request_model("VISION"):
             if self.model is None:
                 print(f"Carregando {self.model_id} (Olhos do Agente)...")
                 try:
-                    # Carrega o modelo de visão multimodal
                     self.model, self.processor = load(self.model_id)
                     print("Visão Real ativada (Qwen2-VL).")
                 except Exception as e:

@@ -87,9 +87,6 @@ class VoiceOverlay(QWidget):
         self.setFixedSize(200, 52)
         self._position()
 
-        if HAS_NATIVE_BLUR:
-            self._apply_blur()
-
     def _position(self):
         screen = self.screen().geometry()
         self.move(screen.width() - self.width() - 24, 110)
