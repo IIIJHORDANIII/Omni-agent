@@ -6,8 +6,8 @@ Executar: python train_wake_word.py
 import sys
 import os
 
-# Ajusta o path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Ajusta o path para que os imports funcionem corretamente
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 
 from core.wake_word_service import wake_word
 

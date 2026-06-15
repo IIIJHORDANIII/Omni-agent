@@ -31,7 +31,9 @@ class WakeWordService:
         self.RATE = 16000
         self.CHUNK = 1024
         
-        self.data_dir = Path("memory_db/wake_word")
+        # Caminho base: raiz do projeto (src/..)
+        base_dir = Path(__file__).parent.parent.parent
+        self.data_dir = base_dir / "memory_db" / "wake_word"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
         self.templates_file = self.data_dir / "templates.npy"
