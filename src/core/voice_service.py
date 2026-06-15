@@ -282,89 +282,89 @@ class VoiceService:
                             log_count += 1
                             if log_count % 5 == 0:
                                 print(f"DEBUG AUDIO: energy={energy:.4f}, window_len={len(self.wake_word_window)}")
-                                if energy > 0.016:
-                                    from core.model_arbiter import arbiter
-                                    
-                                    # Verificar se wake word treinada está disponível
-                                    use_trained = self.wake_word.is_trained()
-                                    
-                                    if use_trained:
-                                        # Deteção por similaridade (mais rápido, sem Whisper)
-                                        is_detected, similarity = self.wake_word.detect(audio_data)
-                                        if is_detected:
-                                            print(f"WAKE WORD (similaridade): sim={similarity:.3f}")
-                                            text = "omni"  # Simular para compatibilidade
-                                        else:
-                                            text = ""
-                                    else:
-                                        # Fallback: Whisper (original)
-                                        arbiter.request_model("WHISPER")
-                                        
-                                        result = mlx_whisper.transcribe(
-                                            audio_data, 
-                                            path_or_hf_repo=self.whisper_model,
-                                            language="pt",
-                                            fp16=True # Mais rápido no M3
-                                        )
-                                        text = result["text"].lower().strip()
-                                        mx.clear_cache()
+                            
+                            text = ""
+                            if energy > 0.016:
+                                from core.model_arbiter import arbiter
                                 
-                                if text:
-                                    if log_count % 5 == 0:
-                                        print(f"DEBUG WHISPER: '{text}'")
-                                    words = text.split()
-                                    if len(words) > 3 and len(set(words)) / len(words) < 0.4:
-                                        last_process_time = time.time()
-                                        continue
+                                # Verificar se wake word treinada está disponível
+                                use_trained = self.wake_word.is_trained()
+                                
+                                if use_trained:
+                                    # Deteção por similaridade (mais rápido, sem Whisper)
+                                    is_detected, similarity = self.wake_word.detect(audio_data)
+                                    if is_detected:
+                                        print(f"WAKE WORD (similaridade): sim={similarity:.3f}")
+                                        text = "omni"
+                                else:
+                                    # Fallback: Whisper (original)
+                                    arbiter.request_model("WHISPER")
+                                    
+                                    result = mlx_whisper.transcribe(
+                                        audio_data, 
+                                        path_or_hf_repo=self.whisper_model,
+                                        language="pt",
+                                        fp16=True # Mais rápido no M3
+                                    )
+                                    text = result["text"].lower().strip()
+                                    mx.clear_cache()
+                            
+                            if text:
+                                if log_count % 5 == 0:
+                                    print(f"DEBUG WHISPER: '{text}'")
+                                words = text.split()
+                                if len(words) > 3 and len(set(words)) / len(words) < 0.4:
+                                    last_process_time = time.time()
+                                    continue
+                                
+                                if len(text) > 2 and "legendas" not in text:
+                                    # Variações fonéticas de "Omni"
+                                    omni_variants = ["omni", "omini", "homni", "ômine", "homeni", "homine", "amni", "omne", "ominy", "omyni", "hominy"]
+                                    stop_keywords = ["chega", "parar", "silêncio", "stop", "quieto", "cala a boca"]
+                                    # Lista negra de falsos positivos (foneticamente parecidos)
+                                    falsepositives = ["menino", "harmonia", "dominó", "dominio", "comigo", "combinou", "iminal", "iminali"]
+                                    
+                                    text_clean = re.sub(r'[^\w\s]', '', text).lower()
+                                    words_clean = text_clean.split()
+                                    
+                                    # Verificar se NÃO é falso positivo
+                                    is_falsepositive = any(fp in text_clean for fp in falsepositives)
+                                    
+                                    # Wake word deve estar no INÍCIO (primeira palavra) para ativar
+                                    is_omni = False
+                                    if not is_falsepositive and words_clean:
+                                        for kw in omni_variants:
+                                            if words_clean[0] == kw:
+                                                is_omni = True
+                                                break
+                                    
+                                    # Stop keywords funcionam em qualquer lugar
+                                    is_stop = any(re.search(r'\b' + re.escape(kw) + r'\b', text_clean) for kw in stop_keywords)
 
-                                    if len(text) > 2 and "legendas" not in text:
-                                        # Variações fonéticas de "Omni"
-                                        omni_variants = ["omni", "omini", "homni", "ômine", "homeni", "homine", "amni", "omne", "ominy", "omyni", "hominy"]
-                                        stop_keywords = ["chega", "parar", "silêncio", "stop", "quieto", "cala a boca"]
-                                        # Lista negra de falsos positivos (foneticamente parecidos)
-                                        falsepositives = ["menino", "harmonia", "dominó", "dominio", "comigo", "combinou", "iminal", "iminali"]
+                                    if is_omni or is_stop:
+                                        print(f"WAKE WORD/STOP DETECTADA: [{text}]")
                                         
-                                        text_clean = re.sub(r'[^\w\s]', '', text).lower()
-                                        words_clean = text_clean.split()
+                                        # BARGE-IN: Cala a boca imediatamente
+                                        self.stop_speaking()
                                         
-                                        # Verificar se NÃO é falso positivo
-                                        is_falsepositive = any(fp in text_clean for fp in falsepositives)
+                                        # Verificar voiceprint ANTES do som de confirmação
+                                        is_user = True  # Padrão: aceitar se não tiver voiceprint
+                                        if self.voiceprint.is_registered():
+                                            # Usar o áudio atual para identificação
+                                            is_user, similarity, label = self.identify_speaker(audio_data)
+                                            if not is_user:
+                                                print(f"Voiceprint: Voz desconhecida (sim={similarity:.2f}). Ignorando wake word.")
+                                                time.sleep(2.0)
+                                                continue
                                         
-                                        # Wake word deve estar no INÍCIO (primeira palavra) para ativar
-                                        is_omni = False
-                                        if not is_falsepositive and words_clean:
-                                            for kw in omni_variants:
-                                                if words_clean[0] == kw:
-                                                    is_omni = True
-                                                    break
+                                        # Tocar som de confirmação APENAS se for o usuário
+                                        from core.sound_service import SoundService
+                                        SoundService.beep()
                                         
-                                        # Stop keywords funcionam em qualquer lugar
-                                        is_stop = any(re.search(r'\b' + re.escape(kw) + r'\b', text_clean) for kw in stop_keywords)
-
-                                        if is_omni or is_stop:
-                                            print(f"WAKE WORD/STOP DETECTADA: [{text}]")
+                                        if self.on_wake_word_detected:
+                                            self.on_wake_word_detected()
                                             
-                                            # BARGE-IN: Cala a boca imediatamente
-                                            self.stop_speaking()
-                                            
-                                            # Verificar voiceprint ANTES do som de confirmação
-                                            is_user = True  # Padrão: aceitar se não tiver voiceprint
-                                            if self.voiceprint.is_registered():
-                                                # Usar o áudio atual para identificação
-                                                is_user, similarity, label = self.identify_speaker(audio_data)
-                                                if not is_user:
-                                                    print(f"Voiceprint: Voz desconhecida (sim={similarity:.2f}). Ignorando wake word.")
-                                                    time.sleep(2.0)
-                                                    continue
-                                            
-                                            # Tocar som de confirmação APENAS se for o usuário
-                                            from core.sound_service import SoundService
-                                            SoundService.beep()
-                                            
-                                            if self.on_wake_word_detected:
-                                                self.on_wake_word_detected()
-                                                
-                                            time.sleep(2.0)
+                                        time.sleep(2.0)
 
                         except Exception as e:
                             print(f"Erro na transcrição Wake Word: {e}")
