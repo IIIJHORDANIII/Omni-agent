@@ -2,6 +2,8 @@ import SwiftUI
 import AppKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    private var keepAliveTimer: Timer?
+    
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Define como app de segundo plano (não aparece no dock)
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -16,8 +18,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         print("Omniscient Headless Executor iniciado.")
         
-        // Mantém o app rodando (sem isso o SwiftUI fecha sozinho)
-        NSApplication.shared.run()
+        // Mantém o app rodando via timer infinito (mais seguro que NSApp.run())
+        keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
+            // Apenas mantém o RunLoop ativo
+        }
+        RunLoop.current.add(keepAliveTimer!, forMode: .default)
+    }
+    
+    func applicationWillTerminate(_ notification: Notification) {
+        keepAliveTimer?.invalidate()
     }
 }
 
