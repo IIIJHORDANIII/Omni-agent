@@ -407,6 +407,8 @@ class MainApp(QApplication):
             self._voice_cycle_active = True
             try:
                 self.hud.voice_signal.emit("LISTENING", True)
+                # Mostrar overlay Siri
+                self._overlay_show()
                 text = self.chat_window.voice_service.listen(continuous_mode=True)
                 if text and len(text.strip()) > 1:
                     clean = re.sub(r'[^\w\s]', '', text.lower()).strip()
@@ -439,6 +441,7 @@ class MainApp(QApplication):
                                 is_user, similarity, label = voice_service.identify_speaker(audio_data)
                                 if not is_user:
                                     print(f"Voiceprint: Voz desconhecida (sim={similarity:.2f}). Ignorando.")
+                                    self._overlay_hide()
                                     return
                         
                         # Remove a wake word do texto antes de enviar ao LLM
@@ -446,7 +449,14 @@ class MainApp(QApplication):
                             clean = re.sub(r'\b' + re.escape(kw) + r'\b', '', clean).strip()
                         if clean:
                             print(f"DEBUG WAKE: Comando: '{clean}'")
-                            self._handle_command_cycle(clean)
+                            self._overlay_transcript(clean)
+                            self._handle_command_cycle_with_overlay(clean)
+                        else:
+                            self._overlay_hide()
+                    else:
+                        self._overlay_hide()
+                else:
+                    self._overlay_hide()
             finally:
                 self._voice_cycle_active = False
                 self.hud.voice_signal.emit("LISTENING", False)
@@ -505,7 +515,10 @@ class MainApp(QApplication):
                         time.sleep(0.2)
                         continue
                     print(f"DEBUG CICLO: Comando final: '{clean}'")
-                    self._handle_command_cycle(clean)
+                    # Mostrar overlay e processar
+                    self._overlay_show()
+                    self._overlay_transcript(clean)
+                    self._handle_command_cycle_with_overlay(clean)
                     time.sleep(0.8)
                 else:
                     time.sleep(0.2)
@@ -520,6 +533,80 @@ class MainApp(QApplication):
             time.sleep(0.1)
         while self.chat_window.voice_service.is_speaking:
             time.sleep(0.1)
+
+    def _handle_command_cycle_with_overlay(self, text):
+        """Processa comando com overlay Siri-like."""
+        self.hud.display_signal.emit("Processando...", "THINKING", 0)
+        
+        def _process():
+            try:
+                print(f"DEBUG OVERLAY: Chamando LLM com {len(self.chat_window.chat_history)} mensagens...")
+                response = self.chat_window.llm_client.chat(self.chat_window.chat_history)
+                print(f"DEBUG OVERLAY: Resposta do LLM: '{response[:100] if response else 'VAZIA'}'")
+                
+                # Enviar resposta para overlay
+                if response:
+                    self._overlay_response(response)
+                    
+                    # Falar resposta
+                    if not response.startswith("[{"):
+                        self.chat_window.voice_service.speak(response)
+                        # Aguardar TTS terminar
+                        while self.chat_window.voice_service.is_speaking:
+                            time.sleep(0.1)
+                
+                # Esconder overlay após 2 segundos
+                time.sleep(2.0)
+                self._overlay_hide()
+                
+            except Exception as e:
+                print(f"DEBUG OVERLAY: ERRO: {e}")
+                self._overlay_error(f"Erro: {e}")
+                time.sleep(3.0)
+                self._overlay_hide()
+        
+        threading.Thread(target=_process, daemon=True).start()
+
+    # Overlay helper methods
+    def _overlay_show(self):
+        """Mostra o overlay Siri."""
+        try:
+            from core.bridge_service import bridge
+            bridge.overlay_show()
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao mostrar overlay: {e}")
+
+    def _overlay_hide(self):
+        """Esconde o overlay Siri."""
+        try:
+            from core.bridge_service import bridge
+            bridge.overlay_hide()
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao esconder overlay: {e}")
+
+    def _overlay_transcript(self, text: str):
+        """Envia transcrição para o overlay."""
+        try:
+            from core.bridge_service import bridge
+            bridge.overlay_transcript(text)
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao enviar transcrição: {e}")
+
+    def _overlay_response(self, text: str):
+        """Envia resposta para o overlay."""
+        try:
+            from core.bridge_service import bridge
+            bridge.overlay_response(text)
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao enviar resposta: {e}")
+
+    def _overlay_error(self, text: str):
+        """Mostra erro no overlay."""
+        try:
+            from core.bridge_service import bridge
+            bridge.overlay_error(text)
+        except Exception as e:
+            print(f"DEBUG OVERLAY: Erro ao enviar erro: {e}")
 
     def setup_tray(self):
         icon_path = resource_path("src/ui/icon.png")

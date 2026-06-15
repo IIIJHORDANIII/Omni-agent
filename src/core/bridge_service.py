@@ -95,5 +95,26 @@ class BridgeService:
         except Exception:
             pass
 
+    # Overlay methods
+    def overlay_show(self):
+        """Mostra o overlay Siri-like."""
+        return self.send_sync({"action": "overlay_show"})
+
+    def overlay_hide(self):
+        """Esconde o overlay Siri-like."""
+        return self.send_sync({"action": "overlay_hide"})
+
+    def overlay_transcript(self, text: str):
+        """Atualiza a transcrição no overlay."""
+        return self.send_sync({"action": "overlay_transcript", "text": text})
+
+    def overlay_response(self, text: str):
+        """Atualiza a resposta no overlay."""
+        return self.send_sync({"action": "overlay_response", "text": text})
+
+    def overlay_error(self, text: str):
+        """Mostra erro no overlay."""
+        return self.send_sync({"action": "overlay_error", "text": text})
+
 # Instância global
 bridge = BridgeService()

@@ -182,6 +182,32 @@ class CommandListenerService {
                 if let level = Float(sendableCommand["level"] ?? "") { self.setBrightness(level: level / 100.0) }
             case "toggle_mute":
                 self.toggleMute()
+            case "overlay_show":
+                Task { @MainActor in
+                    SiriOverlayController.shared.show()
+                }
+            case "overlay_hide":
+                Task { @MainActor in
+                    SiriOverlayController.shared.hide()
+                }
+            case "overlay_transcript":
+                if let text = sendableCommand["text"] {
+                    Task { @MainActor in
+                        SiriOverlayController.shared.updateTranscript(text)
+                    }
+                }
+            case "overlay_response":
+                if let text = sendableCommand["text"] {
+                    Task { @MainActor in
+                        SiriOverlayController.shared.updateResponse(text)
+                    }
+                }
+            case "overlay_error":
+                if let text = sendableCommand["text"] {
+                    Task { @MainActor in
+                        SiriOverlayController.shared.setError(text)
+                    }
+                }
             default: break
             }
         }

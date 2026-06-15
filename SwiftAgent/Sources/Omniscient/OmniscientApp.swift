@@ -9,6 +9,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Inicia o serviço de escuta de comandos
         CommandListenerService.shared.start()
         
+        // Pré-inicializa o overlay Siri
+        Task { @MainActor in
+            _ = SiriOverlayController.shared
+        }
+        
         print("Omniscient Headless Executor iniciado.")
     }
 }
