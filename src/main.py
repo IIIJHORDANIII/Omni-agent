@@ -398,61 +398,24 @@ class MainApp(QApplication):
         # Se já está no loop do atalho, não duplica
         if getattr(self, "_voice_cycle_active", False):
             return
-        # Tocar som de confirmação ANTES de processar
-        from core.sound_service import SoundService
-        SoundService.wake()  # Som "Ping"
-        # Aguardar 0.5s para o usuário saber que foi ouvido
-        time.sleep(0.5)
         def _process():
             self._voice_cycle_active = True
             try:
                 self.hud.voice_signal.emit("LISTENING", True)
-                # Mostrar overlay Siri
                 self._overlay_show()
                 text = self.chat_window.voice_service.listen(continuous_mode=True)
                 if text and len(text.strip()) > 1:
                     clean = re.sub(r'[^\w\s]', '', text.lower()).strip()
+                    # A wake word já foi verificada pelo sistema de similaridade
+                    # Aqui o texto já é o comando p.ex. "bom dia" ou "abre o youtube"
+                    # Remover wake word se ainda estiver no início (caso Whisper tenha capturado)
                     wake_words = ["omni", "omniscient", "omniciente", "bagual", "hominy"]
-                    falsepositives = ["menino", "harmonia", "dominó", "dominio", "comigo", "combinou"]
-                    
-                    # Verificar se NÃO é falso positivo
-                    is_falsepositive = any(fp in clean for fp in falsepositives)
-                    
-                    # Wake word deve estar no INÍCIO (primeira palavra)
-                    words_clean = clean.split()
-                    has_wake = False
-                    if not is_falsepositive and words_clean:
-                        for kw in wake_words:
-                            if words_clean[0] == kw:
-                                has_wake = True
-                                break
-                    
-                    if has_wake:
-                        # Verificar voiceprint ANTES de processar
-                        voice_service = self.chat_window.voice_service
-                        if voice_service.voiceprint.is_registered():
-                            # Capturar áudio atual para identificação
-                            audio_data = None
-                            with voice_service.audio_lock:
-                                if len(voice_service.wake_word_window) >= voice_service.RATE:
-                                    audio_data = np.array(voice_service.wake_word_window, dtype=np.float32)
-                            
-                            if audio_data is not None:
-                                is_user, similarity, label = voice_service.identify_speaker(audio_data)
-                                if not is_user:
-                                    print(f"Voiceprint: Voz desconhecida (sim={similarity:.2f}). Ignorando.")
-                                    self._overlay_hide()
-                                    return
-                        
-                        # Remove a wake word do texto antes de enviar ao LLM
-                        for kw in wake_words:
-                            clean = re.sub(r'\b' + re.escape(kw) + r'\b', '', clean).strip()
-                        if clean:
-                            print(f"DEBUG WAKE: Comando: '{clean}'")
-                            self._overlay_transcript(clean)
-                            self._handle_command_cycle_with_overlay(clean)
-                        else:
-                            self._overlay_hide()
+                    for kw in wake_words:
+                        clean = re.sub(r'^' + re.escape(kw) + r'\s*', '', clean).strip()
+                    if clean:
+                        print(f"DEBUG WAKE: Comando: '{clean}'")
+                        self._overlay_transcript(clean)
+                        self._handle_command_cycle_with_overlay(clean)
                     else:
                         self._overlay_hide()
                 else:
