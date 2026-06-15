@@ -15,6 +15,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         print("Omniscient Headless Executor iniciado.")
+        
+        // Mantém o app rodando (sem isso o SwiftUI fecha sozinho)
+        NSApplication.shared.run()
     }
 }
 

@@ -453,10 +453,18 @@ class VoiceService:
                 # Se so capturou a wake word isolada, ignora
                 keywords = ["jarvis", "agente", "computador", "omni", "omniscient"]
                 clean_verify = re.sub(r'[^\w\s]', '', final_text.lower()).strip()
-                if clean_verify.split()[0] in keywords if clean_verify.split() else False:
-                    return None
+                words_verify = clean_verify.split()
+                if words_verify and words_verify[0] in keywords:
+                    # Se so tem a wake word, ignora
+                    if len(words_verify) <= 1:
+                        self.is_listening_active = False
+                        return None
+                    # Se tem wake word + comando, remove so a wake word
+                    final_text = ' '.join(words_verify[1:])
                     
-                if len(final_text) < 2: return None
+                if len(final_text) < 2:
+                    self.is_listening_active = False
+                    return None
 
                 # Descarta transcoes de ruido (caracteres repetidos excessivos)
                 words = final_text.split()
