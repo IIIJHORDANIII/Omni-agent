@@ -12,8 +12,7 @@ from core.memory_client import MemoryClient
 
 class VisionService:
     _instance = None
-    _lock = threading.Lock() # Lock de classe para evitar concorrência no Metal/RAM
-    _thread_local = threading.local()
+    _lock = threading.Lock()
 
     def __new__(cls):
         with cls._lock:
@@ -28,12 +27,10 @@ class VisionService:
         self.model = None
         self.processor = None
         self.config = None
-        # Qwen2-VL 2B: Ultra-leve (1.5GB), preciso e rápido
         self.model_id = "mlx-community/Qwen2-VL-2B-Instruct-4bit" 
         print(f"Vision Service pronto para Apple Silicon (Qwen2-VL).")
         self._initialized = True
 
-        # Registro no Arbiter para permitir descarga real da RAM
         from core.model_arbiter import arbiter
         arbiter.register_unloader("VISION", self.unload_model)
 
@@ -43,6 +40,11 @@ class VisionService:
             print(f"VisionService: Descarregando {self.model_id} da RAM...")
             self.model = None
             self.processor = None
+            # Força limpeza extra
+            import gc
+            import mlx.core as mx
+            mx.clear_cache()
+            gc.collect()
 
     def _ensure_stream(self):
         """Garante que a thread atual tenha o stream default da GPU bound."""
@@ -89,7 +91,6 @@ class VisionService:
         """Usa Qwen2-VL para descrever a imagem da tela com proteção de memória."""
         with VisionService._lock:
             self._ensure_stream()
-            # FIX: Garante que cada thread tenha seu stream GPU inicializado e bound via context manager
             with mx.stream(mx.default_stream(mx.gpu)):
                 self._ensure_model_loaded()
                 if self.model is None:
@@ -100,85 +101,138 @@ class VisionService:
                     return "Não consegui capturar a tela."
 
                 try:
-                    # Otimiza imagem para o Qwen2-VL
                     img.thumbnail((1024, 1024))
                     
-                    # MLX-VLM Inference
-                    result = generate(
+                    if self.model is None or self.processor is None:
+                        return "Aguardando inicialização dos olhos (Qwen2-VL)..."
+
+                    from mlx_vlm import generate as vlm_gen
+                    
+                    result = vlm_gen(
                         model=self.model, 
                         processor=self.processor, 
                         image=img, 
                         prompt=prompt, 
-                        max_tokens=80,
-                        temperature=0.0
+                        max_tokens=80
                     )
                     
-                    # Limpa cache do Metal após processamento de imagem
                     mx.clear_cache()
                     
-                    # Converte o objeto de resultado para string (pega o texto gerado)
-                    if hasattr(result, 'text'):
+                    if isinstance(result, str):
+                        description = result
+                    elif hasattr(result, 'text'):
                         description = result.text
                     else:
                         description = str(result)
+                        
                     return description.strip()
                 except Exception as e:
-                    print(f"Erro na análise visual: {e}")
+                    print(f"Erro na análise visual (generate): {e}")
+                    mx.clear_cache()
                     return f"Erro ao analisar a tela: {e}"
 
     def capture_webcam(self):
-        """Captura uma foto da webcam usando o ffmpeg (mais leve para macOS)."""
+        """Captura uma foto da webcam usando o ffmpeg ou OpenCV como fallback."""
         import subprocess
         output = "/tmp/omni_face.jpg"
+        
+        # 1. Tenta via ffmpeg (mais rápido se as permissões estiverem ok)
         try:
-            # Captura 1 frame da webcam padrão
             subprocess.run([
-                "ffmpeg", "-y", "-f", "avfoundation", "-video_size", "640x480", 
-                "-i", "0", "-frames:v", "1", output
-            ], capture_output=True, timeout=5)
+                "ffmpeg", "-y", "-f", "avfoundation", "-framerate", "30", "-i", "0", 
+                "-frames:v", "1", "-update", "1", output
+            ], capture_output=True, timeout=10)
             if os.path.exists(output):
                 return Image.open(output)
+        except: pass
+
+        # 2. Fallback para OpenCV (cv2)
+        try:
+            import cv2
+            cap = cv2.VideoCapture(0)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                cap.release()
+                if ret:
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    return Image.fromarray(rgb_frame)
         except Exception as e:
-            print(f"Erro ao acessar webcam: {e}")
+            print(f"Erro ao acessar webcam (OpenCV): {e}")
+        
         return None
 
     def recognize_user(self):
-        """Tenta reconhecer se o Jhordan está na frente da câmera."""
+        """Tenta reconhecer se o usuario esta na frente da camera."""
         with VisionService._lock:
             self._ensure_stream()
             with mx.stream(mx.default_stream(mx.gpu)):
                 self._ensure_model_loaded()
-                
-                # Busca o perfil visual na memória
+
+                # Busca o perfil visual na memoria
                 memory = MemoryClient()
-                profile = memory.get_fact("visual_profile_jhordan")
-                if not profile:
-                    return False # Sem perfil, sem reconhecimento
-                
+                profile = memory.get_fact("user_visual_profile", exact_only=True)
+
+                if not profile or "Consultando" in profile or "Erro" in profile:
+                    print("DEBUG VISION: Perfil visual nao encontrado. Executando registro automatico...")
+                    reg_result = self.register_user()
+                    if "sucesso" not in reg_result.lower():
+                        print(f"DEBUG VISION: Falha no registro: {reg_result}")
+                        return False
+                    # Busca novamente apos registro
+                    profile = memory.get_fact("user_visual_profile", exact_only=True)
+                    if not profile:
+                        return False
+
                 img = self.capture_webcam()
-                if img is None: return False
-                
-                prompt = f"A pessoa nesta imagem condiz com esta descrição: '{profile}'? Responda apenas SIM ou NAO."
-                result = generate(self.model, self.processor, image=img, prompt=prompt, max_tokens=10)
-                text = result.text.upper() if hasattr(result, 'text') else str(result).upper()
-                
-                return "SIM" in text or "YES" in text
+                if img is None:
+                    print("DEBUG VISION: Falha ao capturar webcam.")
+                    return False
+
+                if self.model is None or self.processor is None:
+                    print("DEBUG VISION: Modelos de visao nao carregados.")
+                    return False
+
+                from mlx_vlm import generate as vlm_gen
+                prompt = f"Analise esta imagem. A pessoa presente condiz com esta descricao fisica: '{profile}'? Responda apenas com SIM ou NAO."
+
+                print("DEBUG VISION: Iniciando inferencia de reconhecimento...")
+                result = vlm_gen(self.model, self.processor, image=img, prompt=prompt, max_tokens=10)
+
+                mx.clear_cache()
+                text = ""
+                if isinstance(result, str): text = result.strip()
+                elif hasattr(result, 'text'): text = result.text.strip()
+                else: text = str(result).strip()
+
+                print(f"DEBUG VISION: Resposta do modelo: '{text}'")
+                # Match flexivel: SIM, Sim, sim, S, YES, Yes, yes, Y
+                text_upper = text.upper().strip()
+                return text_upper.startswith("SIM") or text_upper.startswith("YES") or text_upper == "S" or text_upper == "Y"
 
     def register_user(self):
-        """Cria o perfil visual inicial do Jhordan."""
+        """Cria o perfil visual inicial do usuario."""
         with VisionService._lock:
             self._ensure_stream()
             with mx.stream(mx.default_stream(mx.gpu)):
                 self._ensure_model_loaded()
                 img = self.capture_webcam()
-                if img is None: return "Não consegui acessar a câmera para o registro."
-                
-                prompt = "Descreva detalhadamente as características físicas desta pessoa (cabelo, barba, óculos, traços marcantes) para que eu possa reconhecê-la depois. Seja muito preciso."
-                result = generate(self.model, self.processor, image=img, prompt=prompt, max_tokens=150)
-                profile = result.text if hasattr(result, 'text') else str(result)
-                
-                if profile:
+                if img is None: return "Nao consegui acessar a camera para o registro."
+
+                if self.model is None or self.processor is None:
+                    return "Hardware de visao indisponivel no momento."
+
+                from mlx_vlm import generate as vlm_gen
+                prompt = "Descreva detalhadamente as caracteristicas fisicas desta pessoa (cabelo, barba, oculos, tracos marcantes, roupa) para que eu posa reconhece-la depois. Seja muito preciso e objetivo."
+                result = vlm_gen(self.model, self.processor, image=img, prompt=prompt, max_tokens=150)
+
+                mx.clear_cache()
+                profile = ""
+                if isinstance(result, str): profile = result
+                elif hasattr(result, 'text'): profile = result.text
+                else: profile = str(result)
+
+                if profile and len(profile) > 10:
                     memory = MemoryClient()
-                    memory.save_fact("visual_profile_jhordan", profile)
+                    memory.save_fact("user_visual_profile", profile)
                     return f"Perfil visual criado com sucesso: {profile[:100]}..."
                 return "Falha ao gerar perfil visual."

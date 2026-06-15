@@ -1,7 +1,6 @@
 import os
 import time
 from core.semantic_memory import SemanticMemory
-from core.llm_manager import LLMManager
 
 class ErrorLearningService:
     """
@@ -9,24 +8,22 @@ class ErrorLearningService:
     """
     def __init__(self):
         self.semantic_memory = SemanticMemory()
-        self.llm = LLMManager()
 
     def learn_from_error(self, command, error_msg, solution_suggestion):
         """Memoriza um erro e sua correção sugerida."""
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        memory_key = f"error_learning_{int(time.time())}"
+        cmd_name = command.split()[0] if command else "unknown"
+        memory_key = f"erro_resolvido_{cmd_name}_{int(time.time())}"
         
-        # Formata o conhecimento para a memória semântica
-        knowledge = f"""
-        [CONHECIMENTO DE ERRO - {timestamp}]
-        COMANDO: {command}
-        ERRO: {error_msg}
-        SOLUÇÃO/CORREÇÃO: {solution_suggestion}
-        """
+        knowledge = (
+            f"[CONHECIMENTO DE ERRO - {timestamp}]\n"
+            f"COMANDO: {command}\n"
+            f"ERRO: {error_msg}\n"
+            f"SOLUÇÃO/CORREÇÃO: {solution_suggestion}"
+        )
         
-        # Salva na memória semântica para RAG futuro
-        self.semantic_memory.write(f"erro_resolvido_{command.split()[0]}", knowledge)
-        print(f"ErrorLearning: Conhecimento sobre '{command.split()[0]}' memorizado.")
+        self.semantic_memory.write(memory_key, knowledge)
+        print(f"ErrorLearning: Conhecimento sobre '{cmd_name}' memorizado.")
 
     def check_for_prior_errors(self, command):
         """Consulta se já houve erros similares no passado para prevenir repetição."""

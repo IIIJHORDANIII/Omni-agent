@@ -3,11 +3,11 @@ import json
 import threading
 import queue
 import time
+import uuid
 
 class BridgeService:
     """
     Gerencia a comunicação assíncrona com o SwiftAgent.
-    Evita que o Python bloqueie a UI enquanto espera resposta do hardware.
     """
     _instance = None
     _lock = threading.Lock()
@@ -24,26 +24,23 @@ class BridgeService:
         self.socket_path = "/tmp/omniscient_agent.sock"
         self.request_queue = queue.Queue()
         self.results = {}
+        self._result_events = {}
         self.running = True
         
-        # Inicia o worker de processamento
         threading.Thread(target=self._bridge_worker, daemon=True).start()
         self._initialized = True
 
     def send_async(self, command, callback=None):
-        """Envia um comando sem bloquear o chamador."""
-        req_id = str(time.time())
+        req_id = uuid.uuid4().hex
+        self._result_events[req_id] = threading.Event()
         self.request_queue.put((req_id, command, callback))
         return req_id
 
     def send_sync(self, command, timeout=5):
-        """Envia um comando e espera a resposta (com timeout)."""
         req_id = self.send_async(command)
-        start = time.time()
-        while time.time() - start < timeout:
-            if req_id in self.results:
-                return self.results.pop(req_id)
-            time.sleep(0.05)
+        event = self._result_events.get(req_id)
+        if event and event.wait(timeout=timeout):
+            return self.results.pop(req_id, {"status": "error", "message": "Resultado não encontrado"})
         return {"status": "error", "message": "Timeout na ponte Swift"}
 
     def _bridge_worker(self):
@@ -54,17 +51,21 @@ class BridgeService:
                 result = self._raw_send(command)
                 self.results[req_id] = result
                 
+                event = self._result_events.pop(req_id, None)
+                if event:
+                    event.set()
+                
                 if callback:
                     try:
                         callback(result)
                     except Exception as cb_err:
-                        print(f"Bridge: Erro no callback: {cb_err}")
+                        pass
                 
                 self.request_queue.task_done()
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"Bridge Worker Erro: {e}")
+                pass
 
     def _raw_send(self, command_json, retry_count=3):
         for attempt in range(retry_count):
@@ -81,24 +82,17 @@ class BridgeService:
                     return json.loads(response.decode('utf-8'))
                 return {"status": "success"}
             except Exception as e:
-                print(f"Bridge: Tentativa {attempt+1} falhou: {e}")
                 if attempt == retry_count - 1:
-                    # SELF-HEALING: Tenta reiniciar o SwiftAgent se falhou tudo
                     self._restart_native_bridge()
                     return {"status": "error", "message": str(e)}
                 time.sleep(1)
 
     def _restart_native_bridge(self):
         """Tenta reiniciar o processo nativo Swift."""
-        print("Bridge: Tentando auto-healing (reiniciando SwiftAgent)...")
         try:
-            # Envia comando de terminal para rodar o build do Swift se necessário
-            # Ou apenas tenta matar e rodar de novo
             import subprocess
-            subprocess.run(["killall", "OmniscientAgent"], capture_output=True)
-            # O MainApp deve ter a lógica de garantir que ele rode, 
-            # mas aqui podemos disparar um sinal.
-        except:
+            subprocess.run(["killall", "Omniscient"], capture_output=True)
+        except Exception:
             pass
 
 # Instância global

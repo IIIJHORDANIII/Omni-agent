@@ -26,18 +26,16 @@ class VoiceService:
             if self._initialized: return
             self._is_speaking_internal = False 
             self.on_wake_word_detected = on_wake_word_detected
-            self.status_callback = None # Para notificar início/fim de fala
+            self.status_callback = None
             self.running = True
             self.audio_lock = threading.Lock()
-            self.speaking_lock = threading.Lock() # Lock exclusivo para saída de voz
+            self.speaking_lock = threading.Lock()
             
-            # Configurações de Áudio
             self.FORMAT = pyaudio.paInt16
             self.CHANNELS = 1
             self.RATE = 16000
             self.CHUNK = 1024
             
-            # Inicializa PyAudio de forma persistente
             self.p = pyaudio.PyAudio()
             self.stream = self.p.open(format=self.FORMAT,
                                     channels=self.CHANNELS,
@@ -48,26 +46,35 @@ class VoiceService:
             self.audio_buffer = Queue()
             self.last_audio_time = time.time() 
             
-            # Motor de Voz: Nativo macOS (Siri)
-            self.voice = "Siri" # Tenta usar a voz da Siri
+            self.voice = "Siri"
             self.current_playback_process = None
             self.active_session_id = 0
             self.abort_listen = False
-            self.is_listening_active = False # Evita que o processador de wake word roube áudio do listen()
+            self.is_listening_active = False
             
-            # Modelo Whisper (Transcrição)
             self.whisper_model = "mlx-community/whisper-large-v3-turbo"
             
-            # Wake Word buffer
             self.wake_word_window = []
             self.window_seconds = 2.5
             self.samples_needed = int(self.RATE * self.window_seconds)
-            self.is_continuous_mode = False # Nova flag para mãos-livres
+            self.is_continuous_mode = False
+
+            # Voiceprint: identificacao por voz
+            self._voiceprint = None
+            self._last_speaker = None
+            self._last_similarity = 0.0
+
             self._initialized = True
 
-            # Registro no Arbiter
             from core.model_arbiter import arbiter
             arbiter.register_unloader("WHISPER", self.unload_model)
+
+    @property
+    def voiceprint(self):
+        if self._voiceprint is None:
+            from core.voiceprint_service import VoiceprintService
+            self._voiceprint = VoiceprintService()
+        return self._voiceprint
 
     def unload_model(self):
         """No MLX Whisper, o modelo é frequentemente carregado sob demanda, 
@@ -79,13 +86,77 @@ class VoiceService:
             pass
 
     def toggle_continuous_mode(self, enabled=None):
-        """Alterna ou define o estado do modo de escuta contínua."""
+        """Alterna ou define o estado do modo de escuta continua."""
         if enabled is None:
             self.is_continuous_mode = not self.is_continuous_mode
         else:
             self.is_continuous_mode = enabled
-        print(f"🎤 Voz: Modo Contínuo {'ATIVADO' if self.is_continuous_mode else 'DESATIVADO'}")
+        print(f"Voz: Modo Continuo {'ATIVADO' if self.is_continuous_mode else 'DESATIVADO'}")
         return self.is_continuous_mode
+
+    def enroll_voice(self, num_samples=5, duration_each=3):
+        """
+        Enrola a voz do usuario. Grava N amostras de D segundos cada.
+        Retorna: True se sucesso, False caso contrario.
+        """
+        print(f"Voiceprint: Gravando {num_samples} amostras de {duration_each}s cada...")
+        print("Fale uma frase curta e clara a cada vez. Aguarde o sinal.")
+
+        samples = []
+        for i in range(num_samples):
+            print(f"  Amostra {i+1}/{num_samples}... grave AGORA")
+            audio = self._record_audio(duration_each)
+            if audio is not None and len(audio) > 0:
+                samples.append(audio)
+                print(f"  Amostra {i+1} capturada ({len(audio)/self.RATE:.1f}s)")
+            else:
+                print(f"  Amostra {i+1} falhou")
+
+        if len(samples) < 2:
+            print("Voiceprint: Amostras insuficientes.")
+            return False
+
+        success = self.voiceprint.register(samples)
+        if success:
+            print("Voiceprint: Perfil de voz registrado com sucesso!")
+        else:
+            print("Voiceprint: Falha no registro.")
+        return success
+
+    def _record_audio(self, duration_seconds):
+        """Grava audio por N segundos e retorna numpy array."""
+        import numpy as np
+        frames = []
+        for _ in range(0, int(self.RATE / self.CHUNK * duration_seconds)):
+            try:
+                data = self.stream.read(self.CHUNK, exception_on_overflow=False)
+                frames.append(data)
+            except Exception:
+                break
+
+        if not frames:
+            return None
+
+        audio_bytes = b''.join(frames)
+        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        return audio_np
+
+    def identify_speaker(self, audio_np):
+        """
+        Identifica o falante a partir do audio.
+        Retorna: (is_user, similarity, label)
+        """
+        if not self.voiceprint.is_registered():
+            return (True, 0.0, "sem_perfil")
+
+        is_user, similarity, label = self.voiceprint.identify(audio_np)
+        self._last_speaker = label
+        self._last_similarity = similarity
+        return (is_user, similarity, label)
+
+    def get_last_speaker(self):
+        """Retorna o ultimo falante identificado."""
+        return self._last_speaker, self._last_similarity
 
     @property
     def is_speaking(self):
@@ -130,6 +201,7 @@ class VoiceService:
 
     def _audio_collector(self):
         """Coleta áudio do microfone continuamente (mesmo falando, para barge-in)."""
+        print("DEBUG AUDIO: Audio collector iniciado")
         while self.running:
             try:
                 data = self.stream.read(self.CHUNK, exception_on_overflow=False)
@@ -148,6 +220,7 @@ class VoiceService:
 
     def _audio_processor(self):
         """Esvazia o buffer de áudio continuamente."""
+        print("DEBUG AUDIO: Audio processor iniciado")
         while self.running:
             # Se a escuta ativa estiver ligada, deixamos o áudio no buffer para o listen()
             if self.is_listening_active:
@@ -183,6 +256,7 @@ class VoiceService:
         print("Monitorando Wake Word (Whisper Turbo)...")
         last_process_time = time.time()
         self._ensure_stream()
+        log_count = 0
         
         while self.running:
             if time.time() - last_process_time > 1.2:
@@ -195,35 +269,54 @@ class VoiceService:
                     with mx.stream(mx.default_stream(mx.gpu)):
                         try:
                             energy = np.sqrt(np.mean(audio_data**2))
-                            if energy > 0.012:
+                            log_count += 1
+                            if log_count % 5 == 0:
+                                print(f"DEBUG AUDIO: energy={energy:.4f}, window_len={len(self.wake_word_window)}")
+                            if energy > 0.016:
                                 from core.model_arbiter import arbiter
+                                # Se o LLM é Cloud, o WHISPER pode ficar carregado permanentemente
                                 arbiter.request_model("WHISPER")
                                 
-                                # Usa getattr para segurança caso o modelo não tenha sido carregado
-                                model = getattr(self, "whisper_model", "mlx-community/whisper-large-v3-turbo")
                                 result = mlx_whisper.transcribe(
                                     audio_data, 
-                                    path_or_hf_repo=model,
-                                    language="pt"
+                                    path_or_hf_repo=self.whisper_model,
+                                    language="pt",
+                                    fp16=True # Mais rápido no M3
                                 )
                                 text = result["text"].lower().strip()
                                 mx.clear_cache()
                                 
                                 if text:
+                                    if log_count % 5 == 0:
+                                        print(f"DEBUG WHISPER: '{text}'")
                                     words = text.split()
                                     if len(words) > 3 and len(set(words)) / len(words) < 0.4:
                                         last_process_time = time.time()
                                         continue
 
                                     if len(text) > 2 and "legendas" not in text:
-                                        # Variações fonéticas de "Omni" e comandos de interrupção
-                                        omni_variants = ["omni", "omini", "homni", "ômine", "homeni", "homine", "amni", "omne", "ominy", "omyni"]
-                                        stop_keywords = ["chega", "para", "parar", "silêncio", "stop", "quieto", "cala a boca"]
+                                        # Variações fonéticas de "Omni"
+                                        omni_variants = ["omni", "omini", "homni", "ômine", "homeni", "homine", "amni", "omne", "ominy", "omyni", "hominy"]
+                                        stop_keywords = ["chega", "parar", "silêncio", "stop", "quieto", "cala a boca"]
+                                        # Lista negra de falsos positivos (foneticamente parecidos)
+                                        falsepositives = ["menino", "harmonia", "dominó", "dominio", "comigo", "combinou", "iminal", "iminali"]
                                         
-                                        words_in_text = re.sub(r'[^\w\s]', '', text).split()
-
-                                        is_omni = any(kw in words_in_text for kw in omni_variants)
-                                        is_stop = any(kw in words_in_text for kw in stop_keywords)
+                                        text_clean = re.sub(r'[^\w\s]', '', text).lower()
+                                        words_clean = text_clean.split()
+                                        
+                                        # Verificar se NÃO é falso positivo
+                                        is_falsepositive = any(fp in text_clean for fp in falsepositives)
+                                        
+                                        # Wake word deve estar no INÍCIO (primeira palavra) para ativar
+                                        is_omni = False
+                                        if not is_falsepositive and words_clean:
+                                            for kw in omni_variants:
+                                                if words_clean[0] == kw:
+                                                    is_omni = True
+                                                    break
+                                        
+                                        # Stop keywords funcionam em qualquer lugar
+                                        is_stop = any(re.search(r'\b' + re.escape(kw) + r'\b', text_clean) for kw in stop_keywords)
 
                                         if is_omni or is_stop:
                                             print(f"WAKE WORD/STOP DETECTADA: [{text}]")
@@ -231,9 +324,19 @@ class VoiceService:
                                             # BARGE-IN: Cala a boca imediatamente
                                             self.stop_speaking()
                                             
-                                            # Se for apenas um comando de "chega", não precisamos processar como comando de voz complexo
-                                            # Mas para manter a consistência, deixamos o fluxo seguir, 
-                                            # o LLM saberá responder "Ok" e parar.
+                                            # Verificar voiceprint ANTES do som de confirmação
+                                            is_user = True  # Padrão: aceitar se não tiver voiceprint
+                                            if self.voiceprint.is_registered():
+                                                # Usar o áudio atual para identificação
+                                                is_user, similarity, label = self.identify_speaker(audio_data)
+                                                if not is_user:
+                                                    print(f"Voiceprint: Voz desconhecida (sim={similarity:.2f}). Ignorando wake word.")
+                                                    time.sleep(2.0)
+                                                    continue
+                                            
+                                            # Tocar som de confirmação APENAS se for o usuário
+                                            from core.sound_service import SoundService
+                                            SoundService.beep()
                                             
                                             if self.on_wake_word_detected:
                                                 self.on_wake_word_detected()
@@ -324,13 +427,30 @@ class VoiceService:
                 final_text = re.sub(r'[^\w\sÀ-ÿ.,!?]', '', final_text)
                 mx.clear_cache()
                 
-                # Se só capturou a wake word isolada, ignora
+                # Se so capturou a wake word isolada, ignora
                 keywords = ["jarvis", "agente", "computador", "omni", "omniscient"]
                 clean_verify = re.sub(r'[^\w\s]', '', final_text.lower()).strip()
-                if clean_verify in keywords:
+                if clean_verify.split()[0] in keywords if clean_verify.split() else False:
                     return None
                     
                 if len(final_text) < 2: return None
+
+                # Descarta transcoes de ruido (caracteres repetidos excessivos)
+                words = final_text.split()
+                if words and len(words) > 3:
+                    unique_ratio = len(set(w.lower() for w in words)) / len(words)
+                    if unique_ratio < 0.2:
+                        print(f"Voz: Transcricao descartada (ruido): {final_text[:50]}...")
+                        self.is_listening_active = False
+                        return None
+
+                # Identificacao por voz (voiceprint)
+                is_user, similarity, label = self.identify_speaker(audio_data)
+                if not is_user and self.voiceprint.is_registered():
+                    print(f"Voiceprint: Voz desconhecida (sim={similarity:.2f}). Comando ignorado.")
+                    self.is_listening_active = False
+                    return None
+
                 print(f"Comando completo: {final_text}")
                 self.is_listening_active = False
                 return final_text
@@ -374,7 +494,6 @@ class VoiceService:
 
     def _speak_native(self, text, session_at_request):
         def _speak():
-            # Lock para evitar que múltiplas falas se sobreponham
             with self.speaking_lock:
                 if session_at_request != self.active_session_id: return
 
@@ -382,23 +501,21 @@ class VoiceService:
                     self.is_speaking = True
                     if self.status_callback: self.status_callback("SPEAKING", True)
                     
-                    # Limpeza agressiva para fala fluída (Filtro Anti-Pensamento v2)
                     clean_text = re.sub(r'<(think|reasoning)>.*?</\1>', '', text, flags=re.DOTALL | re.IGNORECASE)
-                    # Caso a tag não tenha sido fechada
                     if "<think>" in clean_text.lower():
                         clean_text = clean_text.lower().split("<think>")[0]
                     
-                    # Remove prefixos comuns de raciocínio
                     clean_text = re.sub(r'^(Pensamento|Raciocínio|Thought|Análise):.*', '', clean_text, flags=re.IGNORECASE | re.MULTILINE)
-                    
                     clean_text = re.sub(r'[*#_`~]', '', clean_text)
                     clean_text = re.sub(r'\[.*?\]', '', clean_text).strip()
                     
                     if not clean_text or len(clean_text) < 2: return
 
-                    # Usamos o comando 'say' sem o parâmetro -v para respeitar a voz padrão do sistema
-                    # O usuário deve selecionar 'Siri Masculino' nas Configurações do macOS -> Acessibilidade -> Conteúdo Falado
-                    self.current_playback_process = subprocess.Popen(["say", "--", clean_text])
+                    cmd = ["say"]
+                    cmd.append("--")
+                    cmd.append(clean_text)
+                    
+                    self.current_playback_process = subprocess.Popen(cmd)
                     self.current_playback_process.wait()
                     self.current_playback_process = None
                 except Exception as e:

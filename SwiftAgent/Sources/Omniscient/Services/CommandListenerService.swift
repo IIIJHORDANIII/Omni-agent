@@ -23,9 +23,22 @@ class CommandListenerService {
         
         // Iniciar Monitor de Eventos Globais
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-            // Exemplo: Cmd+Shift+F1 (KeyCode 122)
-            if event.modifierFlags.contains([.command, .shift]) && event.keyCode == 122 {
-                self.notifyPython(event: "hotkey_f1")
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let keyCode = event.keyCode
+            
+            // LOG DE DEPURAÇÃO TOTAL: Imprime absolutamente qualquer tecla pressionada enquanto o app roda em background
+            print("DEBUG SWIFT: KeyCode: \(keyCode), Flags: \(flags)")
+            
+            // Atalho para Chat: Command + Shift + O (KeyCode 31)
+            if flags.contains([.command, .shift]) && keyCode == 31 {
+                print("DEBUG SWIFT: Hotkey Chat Detectada (Cmd+Shift+O)!")
+                self.notifyPython(event: "hotkey_chat")
+            }
+            
+            // Atalho para Voz: Command + Shift + Enter (KeyCode 36)
+            if flags.contains([.command, .shift]) && keyCode == 36 {
+                print("DEBUG SWIFT: Hotkey Voz Detectada (Cmd+Shift+Enter)!")
+                self.notifyPython(event: "hotkey_voice")
             }
         }
         

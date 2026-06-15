@@ -50,7 +50,7 @@ class SentinelService:
                     time.sleep(self.check_interval_bat)
                     
             except Exception as e:
-                print(f"Erro no loop do Sentinela: {e}")
+                print(f"Erro no loop do Sentinela (Reconhecimento Facial): {e}")
                 time.sleep(60)
 
     def stop(self):

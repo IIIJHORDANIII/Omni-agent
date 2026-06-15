@@ -42,26 +42,63 @@ Use esta habilidade quando...
 """
         try:
             response = self.llm.generate_command(prompt, system_context="EVOLUTION_FORGE")
-            
+
             if "SKIP" in response.upper() and len(response) < 20:
-                print("🧠 Evolution Service: Tarefa trivial. Nenhuma skill nova gerada.")
+                print("Evolution Service: Tarefa trivial. Nenhuma skill nova gerada.")
                 return False
-                
-            # Extrai o título para nomear a pasta
+
+            # Validacao do conteudo gerado
+            validation = self._validate_skill(response)
+            if not validation["valid"]:
+                print(f"Evolution Service: Skill rejeitada - {validation['reason']}")
+                return False
+
+            # Extrai o titulo para nomear a pasta
             first_line = response.split('\n')[0]
             skill_name = first_line.replace("# Habilidade:", "").strip().lower().replace(" ", "_").replace("/", "-")
-            if not skill_name:
+            if not skill_name or len(skill_name) < 3:
                 skill_name = f"auto_skill_{int(time.time())}"
-                
+
+            # Verifica duplicatas
             skill_path = os.path.join(self.skills_dir, skill_name)
+            if os.path.exists(skill_path):
+                print(f"Evolution Service: Skill '{skill_name}' ja existe. Pulando.")
+                return False
+
             os.makedirs(skill_path, exist_ok=True)
-            
+
             with open(os.path.join(skill_path, "SKILL.md"), "w", encoding="utf-8") as f:
                 f.write(response)
-                
-            print(f"🌟 EVOLUÇÃO: Nova habilidade '{skill_name}' aprendida e salva!")
+
+            print(f"EVOLUCAO: Nova habilidade '{skill_name}' aprendida e salva!")
             return skill_name
-            
+
         except Exception as e:
             print(f"Erro no Evolution Service: {e}")
             return False
+
+    def _validate_skill(self, skill_content):
+        """Valida se o conteudo da skill e util e seguro."""
+        if not skill_content or len(skill_content) < 50:
+            return {"valid": False, "reason": "Conteudo muito curto"}
+
+        required_sections = ["# Habilidade", "## Processo", "## Verificacao"]
+        for section in required_sections:
+            if section.lower() not in skill_content.lower():
+                # Tenta formatos alternativos
+                alt_sections = ["# Habilidade", "# Skill", "## Passos", "## Steps"]
+                if not any(s.lower() in skill_content.lower() for s in alt_sections):
+                    return {"valid": False, "reason": f"Secao obrigatoria '{section}' ausente"}
+
+        # Verifica se nao contem comandos perigosos
+        dangerous = ["rm -rf", "sudo rm", "chmod 777", "eval(", "exec("]
+        for d in dangerous:
+            if d in skill_content:
+                return {"valid": False, "reason": f"Conteudo contem comando perigoso: {d}"}
+
+        # Verifica se nao e apenas repeticoes
+        lines = [l.strip() for l in skill_content.split('\n') if l.strip()]
+        if len(set(lines)) < len(lines) * 0.5:
+            return {"valid": False, "reason": "Conteudo excessivamente repetitivo"}
+
+        return {"valid": True, "reason": "OK"}

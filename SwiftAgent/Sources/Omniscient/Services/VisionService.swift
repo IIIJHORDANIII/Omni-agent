@@ -25,7 +25,15 @@ class VisionService {
     
     func analyzeImage(image: CGImage) async throws -> String {
         return try await withCheckedThrowingContinuation { continuation in
+            var resumed = false
+            let lock = NSLock()
+            
             let request = VNRecognizeTextRequest { request, error in
+                lock.lock()
+                defer { lock.unlock() }
+                guard !resumed else { return }
+                resumed = true
+                
                 if let error = error {
                     continuation.resume(throwing: error)
                     return
@@ -42,6 +50,10 @@ class VisionService {
             do {
                 try handler.perform([request])
             } catch {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !resumed else { return }
+                resumed = true
                 continuation.resume(throwing: error)
             }
         }

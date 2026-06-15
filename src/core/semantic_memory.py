@@ -55,6 +55,17 @@ class SemanticMemory:
             print(f"Erro ao escrever na memória semântica: {e}")
             return False
 
+    def get_exact_fact(self, key):
+        """Recupera um fato específico pelo seu ID exato."""
+        try:
+            result = self.collection.get(ids=[key])
+            if result and 'documents' in result and result['documents']:
+                return result['documents'][0]
+            return None
+        except Exception as e:
+            print(f"Erro ao buscar fato exato: {e}")
+            return None
+
     def query(self, text, n_results=3):
         """Busca os fatos mais relevantes baseados no significado do texto."""
         try:
