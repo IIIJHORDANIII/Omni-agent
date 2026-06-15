@@ -63,6 +63,9 @@ class VoiceService:
             self._voiceprint = None
             self._last_speaker = None
             self._last_similarity = 0.0
+            
+            # Wake Word treinável
+            self._wake_word = None
 
             self._initialized = True
 
@@ -75,6 +78,13 @@ class VoiceService:
             from core.voiceprint_service import VoiceprintService
             self._voiceprint = VoiceprintService()
         return self._voiceprint
+    
+    @property
+    def wake_word(self):
+        if self._wake_word is None:
+            from core.wake_word_service import WakeWordService
+            self._wake_word = WakeWordService()
+        return self._wake_word
 
     def unload_model(self):
         """No MLX Whisper, o modelo é frequentemente carregado sob demanda, 
@@ -272,19 +282,32 @@ class VoiceService:
                             log_count += 1
                             if log_count % 5 == 0:
                                 print(f"DEBUG AUDIO: energy={energy:.4f}, window_len={len(self.wake_word_window)}")
-                            if energy > 0.016:
-                                from core.model_arbiter import arbiter
-                                # Se o LLM é Cloud, o WHISPER pode ficar carregado permanentemente
-                                arbiter.request_model("WHISPER")
-                                
-                                result = mlx_whisper.transcribe(
-                                    audio_data, 
-                                    path_or_hf_repo=self.whisper_model,
-                                    language="pt",
-                                    fp16=True # Mais rápido no M3
-                                )
-                                text = result["text"].lower().strip()
-                                mx.clear_cache()
+                                if energy > 0.016:
+                                    from core.model_arbiter import arbiter
+                                    
+                                    # Verificar se wake word treinada está disponível
+                                    use_trained = self.wake_word.is_trained()
+                                    
+                                    if use_trained:
+                                        # Deteção por similaridade (mais rápido, sem Whisper)
+                                        is_detected, similarity = self.wake_word.detect(audio_data)
+                                        if is_detected:
+                                            print(f"WAKE WORD (similaridade): sim={similarity:.3f}")
+                                            text = "omni"  # Simular para compatibilidade
+                                        else:
+                                            text = ""
+                                    else:
+                                        # Fallback: Whisper (original)
+                                        arbiter.request_model("WHISPER")
+                                        
+                                        result = mlx_whisper.transcribe(
+                                            audio_data, 
+                                            path_or_hf_repo=self.whisper_model,
+                                            language="pt",
+                                            fp16=True # Mais rápido no M3
+                                        )
+                                        text = result["text"].lower().strip()
+                                        mx.clear_cache()
                                 
                                 if text:
                                     if log_count % 5 == 0:
