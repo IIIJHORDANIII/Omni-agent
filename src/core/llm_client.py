@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import threading
 from dotenv import load_dotenv
 from core.execution_service import ExecutionService
 from core.memory_client import MemoryClient
@@ -10,6 +11,12 @@ from core.vision_service import VisionService
 from core.context_service import ContextService
 from core.tool_dispatcher import ToolDispatcher
 from core.llm_manager import LLMManager
+from core.semantic_memory import SemanticMemory
+from core.evolution_service import EvolutionService
+from core.mcp_client import MCPClient
+from core.crawler_service import ProjectCrawlerService
+from core.swarm_manager import SwarmManager
+from core.computer_use import ComputerUseService
 
 # Carrega variáveis de ambiente
 load_dotenv()
@@ -18,6 +25,12 @@ class LLMClient:
     def __init__(self):
         # Usamos o MLX Manager nativo por padrão
         self.manager = LLMManager()
+        self.semantic_memory = SemanticMemory()
+        self.evolution = EvolutionService(self.manager)
+        self.mcp = MCPClient()
+        self.crawler = ProjectCrawlerService(self.manager)
+        self.swarm = SwarmManager(self.manager)
+        self.computer = ComputerUseService()
         
         self.execution_service = ExecutionService()
         self.memory_client = MemoryClient()
@@ -81,6 +94,7 @@ CONTEXTO DO MAC:
 {ctx}
 """
 
+
     def _clean_response(self, text, is_translation_pass=False):
         if not text: return ""
         
@@ -106,15 +120,25 @@ CONTEXTO DO MAC:
             # Retorna apenas o JSON para o Dispatcher
             return clean_text[json_match.start():json_match.end()].strip()
 
+        # Caso a tag não tenha sido fechada (streaming ou erro de geração)
+        if "<think>" in clean_text.lower():
+            clean_text = clean_text.lower().split("<think>")[0]
+            
         return clean_text.strip()
 
-    def chat(self, messages, include_vision=False, image_b64=None):
+    def chat(self, messages, include_vision=False, image_b64=None, stream_callback=None):
         try:
             last_message = messages[-1]["content"] if messages else ""
             
             # 1. Constrói o histórico com o System Prompt no topo
             full_messages = []
+            
+            # RECUPERAÇÃO SEMÂNTICA (RAG): Busca fatos relevantes na memória baseados na mensagem atual
+            semantic_context = self.semantic_memory.get_context_for_prompt(last_message)
+            
             system_prompt = self.get_system_prompt()
+            if semantic_context:
+                system_prompt += f"\n{semantic_context}"
             
             if include_vision:
                 vision_prompt = f"Descreva detalhadamente o que está na tela, focando em: {last_message}"
@@ -123,11 +147,14 @@ CONTEXTO DO MAC:
             
             full_messages.append({"role": "system", "content": system_prompt})
             
-            # Adiciona apenas as últimas 10 mensagens para não estourar o contexto
-            full_messages.extend(messages[-10:])
-            
-            print(f"DEBUG LLM: Enviando histórico para o DeepSeek-R1...")
-            answer = self.manager.generate_command(full_messages)
+            # GESTÃO DE CONTEXTO: Resume histórico se for muito longo
+            if len(messages) > 12:
+                print("DEBUG LLM: Histórico longo detectado. Resumindo contexto...")
+                summary_prompt = "Resuma o histórico desta conversa em 3 pontos chave para manter o contexto principal vivo."
+                # ... Lógica de resumo aqui ...
+                context_history = messages[-10:]
+            else:
+                context_history = messages[-10:]
             
             clean_answer = self._clean_response(answer)
 
@@ -154,24 +181,52 @@ CONTEXTO DO MAC:
                 synthesis_messages.append({"role": "assistant", "content": clean_answer})
                 synthesis_messages.append({"role": "user", "content": f"Resultado das ferramentas: {tool_result}. Agora responda ao usuário de forma natural e amigável em Português (Brasil). NÃO responda com JSON nem com blocos de código ou raciocínio."})
                 
-                final_response_raw = self.manager.generate_command(synthesis_messages)
-                final_response = self._clean_response(final_response_raw)
+                # Verifica se há chamada de ferramenta
+                has_json = "{" in answer and ("tool" in answer or "action" in answer)
                 
-                # MECANISMO DE TRADUÇÃO PARA SÍNTESE
-                is_synth_english = final_response.startswith("__NEED_TRANSLATION__") or (len(final_response) > 40 and not any(c in final_response for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ"))
+                if has_json:
+                    print(f"DEBUG: Iteração {iteration} - Ferramenta detectada.")
+                    # Adiciona a ação do assistente ao histórico da iteração
+                    full_messages.append({"role": "assistant", "content": answer})
+                    
+                    # Executa a ferramenta
+                    tool_result = ToolDispatcher.dispatch(answer)
+                    
+                    # Devolve o resultado como 'user' (feedback)
+                    full_messages.append({
+                        "role": "user", 
+                        "content": f"RESULTADO DA FERRAMENTA:\n{tool_result}\nSe a tarefa não terminou ou falhou, use outra estratégia/ferramenta. Se terminou, dê a resposta final (sem JSON)."
+                    })
+                    
+                    # Feedback visual se houver falha na ferramenta (Fase 5 - Transparência)
+                    if "FAILURE" in str(tool_result):
+                        from core.registry import registry
+                        hud = registry.get("hud")
+                        if hud:
+                            hud.display_signal.emit("CORRIGINDO ERRO INTERNO...", "THINKING", 2000)
+                    
+                    # Auto-Evolução (apenas na primeira iteração para manter simples)
+                    if iteration == 1:
+                        threading.Thread(
+                            target=self.evolution.evaluate_and_evolve, 
+                            args=(last_message, answer, str(tool_result)),
+                            daemon=True
+                        ).start()
+                else:
+                    print(f"DEBUG: Iteração {iteration} - Resposta final recebida.")
+                    # Se houver stream callback configurado e for a resposta final, podemos emitir (mas para manter simples o loop ReAct, não usamos streaming interno)
+                    if stream_callback:
+                        stream_callback(answer)
+                    final_response = answer
+                    break
+                    
+            if not final_response:
+                final_response = "Atingi o limite de iterações tentando resolver a tarefa."
                 
-                if is_synth_english:
-                    original_text = final_response.replace("__NEED_TRANSLATION__", "")
-                    print("DEBUG: Síntese em Inglês detectada. Traduzindo...")
-                    translation_prompt = f"Traduza este texto para PORTUGUÊS (BRASIL). Responda APENAS a tradução: {original_text}"
-                    translated = self.manager.generate_command(translation_prompt, system_context="SISTEMA_DE_TRADUCAO_PURAMENTE_EM_PORTUGUES_SEM_META_TALK")
-                    final_response = self._clean_response(translated, is_translation_pass=True)
-
-                import mlx.core as mx
-                mx.clear_cache()
-                return final_response.strip()
+            import mlx.core as mx
+            mx.clear_cache()
+            return final_response.strip()
             
-            return clean_answer.strip()
         except Exception as e:
             print(f"ERRO LLM: {e}")
             return f"Erro na execução da LLM. Verifique os logs do sistema."

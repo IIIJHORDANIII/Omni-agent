@@ -4,85 +4,48 @@ import tempfile
 import os
 import sys
 from core.execution_service import ExecutionService
-from core.memory_client import MemoryClient
-from core.web_service import WebService
-from core.github_service import GithubService
-from core.linear_service import LinearService
+from core.tool_registry import tool_registry
 
-# Instâncias globais
-memory = MemoryClient()
-github = GithubService()
-linear = LinearService()
+# Importa todos os módulos de ferramentas para garantir o registro
+import core.tools.system_tools
+import core.tools.communication_tools
+import core.tools.dev_tools
+import core.tools.ai_tools
 
 class ToolDispatcher:
     @staticmethod
     def dispatch(llm_response):
-        """Analisa a resposta do LLM e executa uma lista de ferramentas com segurança."""
-        # Sanitização: Remove qualquer resquício de tags de pensamento se elas vazarem
-        sanitized_response = llm_response
-        if "<think>" in llm_response:
-            if "</think>" in llm_response:
-                sanitized_response = llm_response.split("</think>")[-1]
-            else:
-                # Se a tag não fechou, ignora tudo antes do que parece ser o JSON
-                start_json = llm_response.find('[')
-                if start_json != -1:
-                    sanitized_response = llm_response[start_json:]
-                else:
-                    return llm_response.strip()
-
-        print(f"DEBUG: Resposta sanitizada: {sanitized_response}")
+        """Analisa a resposta do LLM e executa ferramentas registradas dinamicamente."""
+        from main import MainApp
+        main_app = MainApp.instance() if hasattr(MainApp, 'instance') else None
+        
+        sanitized_response = ToolDispatcher._sanitize(llm_response)
         
         try:
-            # Tenta encontrar o início de um JSON (Array ou Objeto)
-            start_arr = sanitized_response.find('[')
-            start_obj = sanitized_response.find('{')
-            
-            if start_arr != -1 and (start_obj == -1 or start_arr < start_obj):
-                start = start_arr
-                end = sanitized_response.rfind(']') + 1
-            elif start_obj != -1:
-                start = start_obj
-                end = sanitized_response.rfind('}') + 1
-            else:
+            data = ToolDispatcher._extract_json(sanitized_response)
+            if not data:
                 return sanitized_response.strip()
-                
-            json_str = sanitized_response[start:end]
-            # Validação extra: DeepSeek as vezes coloca JSON dentro de blocos de código
-            if "```json" in sanitized_response:
-                code_start = sanitized_response.find("```json") + 7
-                code_end = sanitized_response.find("```", code_start)
-                if code_end != -1:
-                    json_str = sanitized_response[code_start:code_end].strip()
-
-            data = json.loads(json_str)
             
             if isinstance(data, dict):
                 data = [data]
             
             results = []
             for item in data:
-                if not isinstance(item, dict):
-                    continue
+                if not isinstance(item, dict): continue
                     
-                # Robustez: aceita 'tool' ou 'action'
-                tool = item.get("tool") or item.get("action")
-                
-                # Robustez: se não houver 'params', pega o que sobrar no objeto
+                tool_name = item.get("tool") or item.get("action")
                 params = item.get("params")
                 if params is None:
                     params = {k: v for k, v in item.items() if k not in ["tool", "action", "message"]}
                 
-                if tool is None or tool == "none":
+                if tool_name is None or tool_name == "none":
                     msg = item.get("message")
-                    if not msg or msg == "sua resposta":
-                        # Se não há ferramenta nem mensagem, mas há texto fora do JSON, 
-                        # ou se é apenas um objeto de "falha", retorna uma frase amigável.
-                        return "Não entendi como ajudar com esse pedido específico."
-                    results.append(msg)
+                    if msg: results.append(msg)
                     continue
                 
-                print(f"DEBUG: Executando Tool: {tool} com params: {params}")
+                print(f"Dispatcher: Executando {tool_name} com params: {params}")
+                if main_app:
+                    main_app.hud.display_signal.emit(f"Executando {tool_name}...", "THINKING", 0)
                 
                 result = None
                 # Roteamento Inteligente
@@ -268,10 +231,7 @@ class ToolDispatcher:
                     else:
                         results.append("Concluído.")
                 else:
-                    if tool == "open_url" and "http" in str(result):
-                        results.append("Abrindo site.")
-                    else:
-                        results.append(str(result))
+                    results.append(f"Ferramenta '{tool_name}' não encontrada.")
             
             return "\n".join(results)
             
@@ -279,21 +239,50 @@ class ToolDispatcher:
             return f"Erro ao processar comando: {e}"
 
     @staticmethod
-    def _execute_python_sandbox(code):
-        """Executa um script Python de forma isolada e retorna o output."""
-        if not code: return "Nenhum código fornecido."
+    def _sanitize(text):
+        if "<think>" in text:
+            if "</think>" in text:
+                return text.split("</think>")[-1]
+            start_json = text.find('[')
+            if start_json != -1: return text[start_json:]
+        return text
+
+    @staticmethod
+    def _extract_json(text):
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".py") as tmp:
-                tmp.write(code.encode())
-                tmp_path = tmp.name
+            import re
+            # Prioridade para blocos de código JSON
+            code_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+            if code_match:
+                return json.loads(code_match.group(1))
             
-            # Executa com o mesmo venv
-            result = subprocess.run([sys.executable, tmp_path], capture_output=True, text=True, timeout=10)
-            os.remove(tmp_path)
+            # Busca por colchetes ou chaves
+            start_arr = text.find('[')
+            start_obj = text.find('{')
             
-            if result.returncode == 0:
-                return f"Código executado: {result.stdout.strip()}"
+            if start_arr != -1 and (start_obj == -1 or start_arr < start_obj):
+                start, end = start_arr, text.rfind(']') + 1
+            elif start_obj != -1:
+                start, end = start_obj, text.rfind('}') + 1
             else:
-                return f"Erro no código: {result.stderr.strip()}"
-        except Exception as e:
-            return f"Falha no sandbox: {e}"
+                return None
+                
+            return json.loads(text[start:end])
+        except:
+            return None
+
+    @staticmethod
+    def _format_result(tool, result):
+        """Formata o resultado para o LLM, incluindo metadados de execução."""
+        status = "SUCCESS"
+        if isinstance(result, str) and ("Erro" in result or "falhou" in result or "não encontrei" in result.lower()):
+            status = "FAILURE"
+        elif isinstance(result, dict) and result.get("returncode", 0) != 0:
+            status = "FAILURE"
+            
+        output = str(result)
+        if isinstance(result, dict):
+            if "stdout" in result: output = result["stdout"].strip() or "Concluído."
+            if "error" in result: output = f"Erro: {result['error']}"
+        
+        return f"[OBSERVATION: {tool}] status: {status}\noutput: {output}"

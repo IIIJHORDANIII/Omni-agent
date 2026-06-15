@@ -17,14 +17,32 @@ class ChatWindow(QWidget):
         self.llm_client = LLMClient()
         # Passa None explicitamente para evitar erros de assinatura se o motor estiver dessincronizado
         self.voice_service = VoiceService(on_wake_word_detected=None)
-        self.chat_history = []
+        
+        # Carrega estado persistente (Fase 5 - Production Ready)
+        from core.session_persistence import session_persistence
+        saved_state = session_persistence.load()
+        self.chat_history = saved_state.get("messages", [])
+        
         self.tray_icon = None
+        self.is_processing = False
         self.init_ui()
+        
+        # Reconstrói se houver histórico
+        if self.chat_history:
+            self._rebuild_ui_from_history()
         
         # Conecta os sinais
         self.append_text_signal.connect(self._safe_append_to_history)
         self.update_mic_text_signal.connect(self._safe_update_mic_text)
         self.update_input_field_signal.connect(self._safe_update_input_field)
+
+    def _rebuild_ui_from_history(self):
+        for msg in self.chat_history:
+            sender = "VOCÊ" if msg["role"] == "user" else "AGENTE"
+            content = msg["content"]
+            # Pula mensagens de sistema no display
+            if msg["role"] == "system": continue
+            self.text_display.append(f"<b>{sender}:</b> {content}<br>")
 
     def _safe_update_mic_text(self, text):
         self.mic_btn.setText(text)
@@ -33,9 +51,20 @@ class ChatWindow(QWidget):
         self.input_field.setText(text)
         self.send_message()
 
+    def _safe_append_to_history(self, sender, text):
+        self.text_display.append(f"<b>{sender}:</b> {text}<br>")
+        
+        # Atualiza o histórico para o LLM e persiste
+        role = "user" if sender == "VOCÊ" else "assistant"
+        self.chat_history.append({"role": role, "content": text})
+        
+        from core.session_persistence import session_persistence
+        session_persistence.save(messages=self.chat_history)
+
     def init_ui(self):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         
         self.layout = QVBoxLayout()
         self.container = QFrame()
@@ -97,79 +126,36 @@ class ChatWindow(QWidget):
         
         self.layout.addWidget(self.container)
         self.setLayout(self.layout)
-        self.setFixedSize(400, 500)
-
-    def set_tray_icon(self, tray_icon):
-        self.tray_icon = tray_icon
-
-    def show_and_activate(self):
-        if self.tray_icon:
-            geom = self.tray_icon.geometry()
-            self.move(geom.x() - self.width() + geom.width(), geom.y() + geom.height() + 5)
-        
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        self.input_field.setFocus()
-
-    def append_to_history(self, text, role):
-        # Emite sinal para garantir que a UI seja atualizada na Main Thread
-        self.append_text_signal.emit(text, role)
-
-    def _safe_append_to_history(self, text, role):
-        self.chat_history.append({"role": role, "content": text})
-        color = "#888888" if role == "system" else ("#4a9eff" if role == "user" else "#a0a0a0")
-        prefix = "Sistema" if role == "system" else ("Você" if role == "user" else "Agente")
-        self.text_display.append(f'<b style="color: {color};">{prefix}:</b> {text}<br>')
-        # Scroll para o fim
-        self.text_display.verticalScrollBar().setValue(self.text_display.verticalScrollBar().maximum())
+        self.resize(400, 500)
 
     def send_message(self):
         text = self.input_field.text().strip()
-        if not text: return
+        if not text or self.is_processing: return
         
         self.input_field.clear()
-        self.append_to_history(text, "user")
+        self._safe_append_to_history("VOCÊ", text)
         
-        threading.Thread(target=self._process_response, args=(text,), daemon=True).start()
-
-    def _process_response(self, text):
-        # O MLX pode ser lento, então rodamos em background
+        self.is_processing = True
         
-        # Verifica se o usuário pediu análise da tela
-        vision_keywords = ["resumo da tela", "o que tem na tela", "analise a tela", "descreva a tela", "oq tem na tela", "vê a tela"]
-        if any(keyword in text.lower() for keyword in vision_keywords):
-            self.append_to_history("Capturando e analisando tela...", "system")
+        def _process():
             try:
-                image_b64 = self.llm_client.vision_service.capture_screen_base64()
-                if image_b64:
-                    prompt = f"O usuário pediu: '{text}'. Descreva o que está na tela baseado nesse pedido."
-                    response = self.llm_client.chat(
-                        messages=[{"role": "user", "content": prompt}],
-                        include_vision=True,
-                        image_b64=image_b64
-                    )
-                    if response:
-                        self.append_to_history(response, "assistant")
-                        self.voice_service.speak(response)
-                        return
+                # O chat do LLMClient já retorna a resposta e executa ferramentas via ToolDispatcher
+                response = self.llm_client.chat(self.chat_history)
+                self.append_text_signal.emit("AGENTE", response)
+                
+                # Se houver resposta de voz, fala
+                if response and not response.startswith("[{"):
+                    self.voice_service.speak(response)
             except Exception as e:
-                self.append_to_history(f"Erro na análise: {e}", "system")
-
-        # Comportamento padrão de chat
-        response = self.llm_client.chat(self.chat_history)
-        if response:
-            self.append_to_history(response, "assistant")
-            self.voice_service.speak(response)
-
-    def process_silent_command(self, text):
-        """Processa comando vindo da Wake Word."""
-        self.append_to_history(text, "user")
-        threading.Thread(target=self._process_response, args=(text,), daemon=True).start()
+                self.append_text_signal.emit("ERRO", f"Falha no processamento: {e}")
+            finally:
+                self.is_processing = False
+        
+        threading.Thread(target=_process, daemon=True).start()
 
     def start_voice_input(self):
-        self.update_mic_text_signal.emit("🔴")
         def _listen():
+            self.update_mic_text_signal.emit("🔴")
             text = self.voice_service.listen()
             if text:
                 self.update_input_field_signal.emit(text)
@@ -177,3 +163,36 @@ class ChatWindow(QWidget):
             self.update_mic_text_signal.emit("🎤")
         
         threading.Thread(target=_listen, daemon=True).start()
+
+    def show_and_activate(self):
+        """Exibe a janela do chat, traz para frente e foca o campo de input."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.input_field.setFocus()
+
+    def set_tray_icon(self, tray_icon):
+        """Associa o ícone da bandeja para notificações."""
+        self.tray_icon = tray_icon
+
+    def process_silent_command(self, text):
+        """Processa um comando de voz recebido em background (sem digitar no campo)."""
+        if not text or self.is_processing: return
+        
+        self._safe_append_to_history("VOCÊ (Voz)", text)
+        self.is_processing = True
+        
+        def _process():
+            try:
+                response = self.llm_client.chat(self.chat_history)
+                self.append_text_signal.emit("AGENTE", response)
+                
+                # Responde por voz obrigatoriamente já que o input foi por voz
+                if response and not response.startswith("[{"):
+                    self.voice_service.speak(response)
+            except Exception as e:
+                self.append_text_signal.emit("ERRO", f"Falha no processamento: {e}")
+            finally:
+                self.is_processing = False
+                
+        threading.Thread(target=_process, daemon=True).start()

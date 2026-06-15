@@ -23,7 +23,7 @@ class PiperService:
             return
             
         # Default paths
-        base_path = "/Users/pastorello/Documents/pessoal/agent/src/models/piper"
+        base_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models/piper")
         self.model_path = model_path or os.path.join(base_path, "pt_BR-faber-medium.onnx")
         
         self.is_speaking = False
@@ -83,14 +83,16 @@ class PiperService:
                     self.voice.synthesize_wav(clean_text, wav_file)
 
                 if os.path.exists(tmp_path):
-                    # Usa afplay para reprodução assíncrona fácil no macOS
-                    self.current_playback_process = subprocess.Popen(["afplay", tmp_path])
-                    self.current_playback_process.wait()
-                    self.current_playback_process = None
                     try:
-                        os.remove(tmp_path)
-                    except:
-                        pass
+                        # Usa afplay para reprodução assíncrona fácil no macOS
+                        self.current_playback_process = subprocess.Popen(["afplay", tmp_path])
+                        self.current_playback_process.wait()
+                        self.current_playback_process = None
+                    finally:
+                        try:
+                            os.remove(tmp_path)
+                        except:
+                            pass
 
             except Exception as e:
                 print(f"Erro no Piper TTS: {e}")

@@ -8,6 +8,7 @@ import mlx.core as mx
 import threading
 from mlx_vlm import load, generate
 from mlx_vlm.utils import load_config
+from core.memory_client import MemoryClient
 
 class VisionService:
     _instance = None
@@ -32,26 +33,33 @@ class VisionService:
         print(f"Vision Service pronto para Apple Silicon (Qwen2-VL).")
         self._initialized = True
 
+        # Registro no Arbiter para permitir descarga real da RAM
+        from core.model_arbiter import arbiter
+        arbiter.register_unloader("VISION", self.unload_model)
+
+    def unload_model(self):
+        """Libera o modelo da RAM/VRAM."""
+        if self.model:
+            print(f"VisionService: Descarregando {self.model_id} da RAM...")
+            self.model = None
+            self.processor = None
+
     def _ensure_stream(self):
         """Garante que a thread atual tenha o stream default da GPU bound."""
         mx.set_default_stream(mx.default_stream(mx.gpu))
 
     def _ensure_model_loaded(self):
         """Carrega o modelo de visão apenas quando necessário."""
-        if self.model is None:
-            import gc
-            gc.collect()
-            try:
-                mx.clear_cache()
-            except: pass
-            
-            print(f"Carregando {self.model_id} (Olhos do Agente)...")
-            try:
-                # Carrega o modelo de visão multimodal
-                self.model, self.processor = load(self.model_id)
-                print("Visão Real ativada (Qwen2-VL).")
-            except Exception as e:
-                print(f"Erro ao carregar modelo de visão: {e}")
+        from core.model_arbiter import arbiter
+        if arbiter.request_model("VISION"):
+            if self.model is None:
+                print(f"Carregando {self.model_id} (Olhos do Agente)...")
+                try:
+                    # Carrega o modelo de visão multimodal
+                    self.model, self.processor = load(self.model_id)
+                    print("Visão Real ativada (Qwen2-VL).")
+                except Exception as e:
+                    print(f"Erro ao carregar modelo de visão: {e}")
 
     @property
     def sct(self):
@@ -118,13 +126,59 @@ class VisionService:
                     print(f"Erro na análise visual: {e}")
                     return f"Erro ao analisar a tela: {e}"
 
-    def capture_screen_base64(self):
-        """Legado: Captura a tela e converte para base64."""
-        img = self.capture_screen_pil()
-        if img is None: return ""
+    def capture_webcam(self):
+        """Captura uma foto da webcam usando o ffmpeg (mais leve para macOS)."""
+        import subprocess
+        output = "/tmp/omni_face.jpg"
         try:
-            buffered = io.BytesIO()
-            img.thumbnail((512, 512)) 
-            img.save(buffered, format="JPEG", quality=60)
-            return base64.b64encode(buffered.getvalue()).decode('utf-8')
-        except: return ""
+            # Captura 1 frame da webcam padrão
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "avfoundation", "-video_size", "640x480", 
+                "-i", "0", "-frames:v", "1", output
+            ], capture_output=True, timeout=5)
+            if os.path.exists(output):
+                return Image.open(output)
+        except Exception as e:
+            print(f"Erro ao acessar webcam: {e}")
+        return None
+
+    def recognize_user(self):
+        """Tenta reconhecer se o Jhordan está na frente da câmera."""
+        with VisionService._lock:
+            self._ensure_stream()
+            with mx.stream(mx.default_stream(mx.gpu)):
+                self._ensure_model_loaded()
+                
+                # Busca o perfil visual na memória
+                memory = MemoryClient()
+                profile = memory.get_fact("visual_profile_jhordan")
+                if not profile:
+                    return False # Sem perfil, sem reconhecimento
+                
+                img = self.capture_webcam()
+                if img is None: return False
+                
+                prompt = f"A pessoa nesta imagem condiz com esta descrição: '{profile}'? Responda apenas SIM ou NAO."
+                result = generate(self.model, self.processor, image=img, prompt=prompt, max_tokens=10)
+                text = result.text.upper() if hasattr(result, 'text') else str(result).upper()
+                
+                return "SIM" in text or "YES" in text
+
+    def register_user(self):
+        """Cria o perfil visual inicial do Jhordan."""
+        with VisionService._lock:
+            self._ensure_stream()
+            with mx.stream(mx.default_stream(mx.gpu)):
+                self._ensure_model_loaded()
+                img = self.capture_webcam()
+                if img is None: return "Não consegui acessar a câmera para o registro."
+                
+                prompt = "Descreva detalhadamente as características físicas desta pessoa (cabelo, barba, óculos, traços marcantes) para que eu possa reconhecê-la depois. Seja muito preciso."
+                result = generate(self.model, self.processor, image=img, prompt=prompt, max_tokens=150)
+                profile = result.text if hasattr(result, 'text') else str(result)
+                
+                if profile:
+                    memory = MemoryClient()
+                    memory.save_fact("visual_profile_jhordan", profile)
+                    return f"Perfil visual criado com sucesso: {profile[:100]}..."
+                return "Falha ao gerar perfil visual."

@@ -27,3 +27,18 @@ class SoundService:
     def play_voice_start():
         """Som 'PAM' indicando início da gravação."""
         SoundService.play_system_sound("Hero")
+
+    @staticmethod
+    def success():
+        """Som discreto de tarefa concluída."""
+        SoundService.play_system_sound("Bottle")
+
+    @staticmethod
+    def paper():
+        """Som tátil para criação de notas."""
+        SoundService.play_system_sound("Pop")
+
+    @staticmethod
+    def digital_open():
+        """Som de interface para abertura de apps."""
+        SoundService.play_system_sound("Blow")

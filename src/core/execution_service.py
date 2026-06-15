@@ -79,69 +79,97 @@ class ExecutionService:
         return ExecutionService.run_applescript(script)
 
     @staticmethod
-    def open_app(app_name):
-        """Abre um aplicativo, tentando terminal primeiro (sem precisar de permissão de UI)."""
+    def smart_search(query):
+        """Usa o Spotlight (mdfind) para busca semântica/fuzzy no Mac."""
+        try:
+            print(f"SmartSearch: Buscando por '{query}'...")
+            # Busca apenas em pastas de usuário para evitar lixo do sistema
+            cmd = f"mdfind -onlyin ~ '{query}' | head -n 15"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            
+            if not result.stdout.strip():
+                return f"Não encontrei nada relevante para '{query}' no seu Mac."
+            
+            return f"Encontrei estes itens que podem ser o que você procura:\n{result.stdout.strip()}"
+        except Exception as e:
+            return f"Erro na busca inteligente: {e}"
+
+    @staticmethod
+    def resolve_path(name):
+        """Busca agressiva por um caminho no Mac que combine com o nome (case-insensitive)."""
+        try:
+            # 1. Busca rápida em Documents/pessoal (onde o Jhordan guarda a maioria dos projetos)
+            search_cmd = f"find ~/Documents/pessoal -maxdepth 2 -iname '*{name}*' -type d | head -n 1"
+            res = ExecutionService.run_terminal_command(search_cmd)
+            path = res.get("stdout", "").strip()
+            if path: return path
+            
+            # 2. Busca em Documents geral
+            search_cmd = f"find ~/Documents -maxdepth 3 -iname '*{name}*' -type d | head -n 1"
+            res = ExecutionService.run_terminal_command(search_cmd)
+            path = res.get("stdout", "").strip()
+            if path: return path
+            
+            # 3. Busca na Home (Desktop/Downloads)
+            search_cmd = f"find ~ -maxdepth 2 -iname '*{name}*' -type d | head -n 1"
+            res = ExecutionService.run_terminal_command(search_cmd)
+            return res.get("stdout", "").strip() or None
+        except:
+            return None
+
+    @staticmethod
+    def open_app(app_name, path=None):
+        """Abre um aplicativo, permitindo passar um caminho opcional (pasta/arquivo)."""
         if not app_name or "org.python.python" in app_name.lower():
             return {"error": "Nome de aplicativo inválido ou bloqueado."}
             
-        # Mapeamento de nomes comuns para garantir compatibilidade
+        # Se o LLM se confundir e passar uma URL no lugar do app
+        if app_name.startswith("http"):
+            return ExecutionService.open_url(app_name)
+            
+        # Mapeamento de nomes comuns
         app_map = {
-            "notas": "Notes",
-            "notes": "Notes",
-            "calendário": "Calendar",
-            "calendar": "Calendar",
-            "lembretes": "Reminders",
-            "reminders": "Reminders",
-            "contatos": "Contacts",
-            "contacts": "Contacts",
-            "ajustes": "System Settings",
-            "settings": "System Settings",
-            "música": "Music",
-            "music": "Music",
-            "arquivos": "Finder",
-            "finder": "Finder",
-            "safari": "Safari",
-            "chrome": "Google Chrome",
-            "slack": "Slack",
-            "discord": "Discord"
+            "notas": "Notes", "notes": "Notes",
+            "calendário": "Calendar", "calendar": "Calendar",
+            "vscode": "Visual Studio Code", "code": "Visual Studio Code",
+            "visual studio code": "Visual Studio Code",
+            "cursor": "Cursor", "finder": "Finder",
+            "dia": "DIA"
         }
         
         target = app_map.get(app_name.lower(), app_name)
+        cmd = ["open", "-a", target]
+        if path:
+            full_path = os.path.expanduser(path)
+            cmd.append(full_path)
 
         try:
-            # Tenta via comando 'open' do terminal, que é mais robusto
-            subprocess.run(["open", "-a", target], check=True, capture_output=True)
-            import time
-            time.sleep(1)
-            return {"stdout": f"Aplicativo {target} aberto via terminal."}
-        except subprocess.CalledProcessError:
-            # Se falhou com o nome mapeado, tenta o original se for diferente
-            if target != app_name:
-                try:
-                    subprocess.run(["open", "-a", app_name], check=True, capture_output=True)
-                    return {"stdout": f"Aplicativo {app_name} aberto via terminal."}
-                except:
-                    pass
-            
-            # Fallback para AppleScript
-            script = f'tell application "{target}" to activate'
-            res = ExecutionService.run_applescript(script)
-            if res.get("stderr") and target != app_name:
-                script = f'tell application "{app_name}" to activate'
-                res = ExecutionService.run_applescript(script)
-            return res
+            subprocess.run(cmd, check=True, capture_output=True)
+            return {"stdout": f"Aplicativo {target} aberto." + (f" Caminho: {path}" if path else "")}
         except Exception as e:
-            return {"error": f"Erro inesperado ao abrir {app_name}: {e}"}
+            # Tenta fallback sem o '-a' se for um caminho direto ou comando
+            try:
+                if path:
+                    subprocess.run(["open", path], check=True)
+                    return {"stdout": f"Caminho {path} aberto com app padrão."}
+            except: pass
+            return {"error": f"Falha ao abrir {app_name}: {str(e)}"}
 
     @staticmethod
-    def open_url(url):
-        """Abre uma URL no navegador padrão de forma robusta no Mac."""
+    def open_url(url, browser=None):
+        """Abre uma URL no navegador padrão ou em um específico (ex: DIA)."""
         if not url.startswith("http"):
             url = "https://" + url
         try:
             import subprocess
-            subprocess.run(["open", url])
-            return f"Abrindo site: {url}"
+            if browser:
+                # Se for o browser "DIA" (provavelmente um alias ou app específico do usuário)
+                target = "DIA" if browser.upper() == "DIA" else browser
+                subprocess.run(["open", "-a", target, url])
+                return f"Abrindo site no navegador {target}: {url}"
+            else:
+                subprocess.run(["open", url])
+                return f"Abrindo site: {url}"
         except Exception as e:
             return f"Erro ao abrir URL: {str(e)}"
 
@@ -654,23 +682,11 @@ class ExecutionService:
 
     @staticmethod
     def send_command_to_swift(command_json):
-        """Envia um comando JSON via Unix Domain Socket e lê a resposta."""
-        socket_path = "/tmp/omniscient_agent.sock"
-
-        try:
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.connect(socket_path)
-            client.sendall(json.dumps(command_json).encode('utf-8'))
-
-            # Lê a resposta
-            response = client.recv(4096)
-            client.close()
-
-            if response:
-                return json.loads(response.decode('utf-8'))
-            return {"status": "success", "message": "Comando enviado, sem resposta"}
-        except Exception as e:
-            return {"status": "error", "message": f"Falha na comunicação: {e}"}
+        """Envia um comando JSON via BridgeService assíncrona/síncrona."""
+        from core.bridge_service import bridge
+        # Por padrão usamos síncrono para manter compatibilidade, 
+        # mas agora com timeout e sem travar o socket principal.
+        return bridge.send_sync(command_json)
 
 
 
@@ -709,9 +725,25 @@ class ExecutionService:
             return f"Erro ao gerar projeto: {e}"
 
     @staticmethod
-    def create_new_note(path, content):
-        """Cria ou edita uma nota (arquivo de texto)."""
-        return ExecutionService.create_file(path, content)
+    def create_new_note(title, content):
+        """Cria uma nota real no app Notas do macOS via AppleScript."""
+        # Sanitização para AppleScript e conversão básica para "HTML" (que o Notas prefere)
+        escaped_title = title.replace('"', '\\"').replace("'", "\\'")
+        # Substitui quebras de linha por <br> para o corpo da nota
+        html_content = content.replace('"', '\\"').replace("'", "\\'").replace("\n", "<br>")
+        
+        script = f'''
+        tell application "Notes"
+            try
+                -- Tenta criar na conta padrão para ser mais robusto (independente de idioma)
+                set theNote to make new note at default account with properties {{name:"{escaped_title}", body:"{html_content}"}}
+                return "Nota '{escaped_title}' criada com sucesso."
+            on error err
+                return "Erro ao criar nota: " & err
+            end try
+        end tell
+        '''
+        return ExecutionService.run_applescript(script)
 
     @staticmethod
     def read_file(path):

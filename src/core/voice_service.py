@@ -51,6 +51,9 @@ class VoiceService:
             # Motor de Voz: Nativo macOS (Siri)
             self.voice = "Siri" # Tenta usar a voz da Siri
             self.current_playback_process = None
+            self.active_session_id = 0
+            self.abort_listen = False
+            self.is_listening_active = False # Evita que o processador de wake word roube áudio do listen()
             
             # Modelo Whisper (Transcrição)
             self.whisper_model = "mlx-community/whisper-large-v3-turbo"
@@ -59,10 +62,39 @@ class VoiceService:
             self.wake_word_window = []
             self.window_seconds = 2.5
             self.samples_needed = int(self.RATE * self.window_seconds)
+            self.is_continuous_mode = False # Nova flag para mãos-livres
             self._initialized = True
+
+            # Registro no Arbiter
+            from core.model_arbiter import arbiter
+            arbiter.register_unloader("WHISPER", self.unload_model)
+
+    def unload_model(self):
+        """No MLX Whisper, o modelo é frequentemente carregado sob demanda, 
+        mas aqui limpamos referências se houver."""
+        if hasattr(self, 'whisper_model'):
+            print("VoiceService: Descarregando Whisper da RAM...")
+            # Como mlx_whisper.transcribe aceita o path, 
+            # não mantemos um objeto model pesado persistente.
+            pass
+
+    def toggle_continuous_mode(self, enabled=None):
+        """Alterna ou define o estado do modo de escuta contínua."""
+        if enabled is None:
+            self.is_continuous_mode = not self.is_continuous_mode
+        else:
+            self.is_continuous_mode = enabled
+        print(f"🎤 Voz: Modo Contínuo {'ATIVADO' if self.is_continuous_mode else 'DESATIVADO'}")
+        return self.is_continuous_mode
 
     @property
     def is_speaking(self):
+        # Prioridade para o motor Piper se estiver em uso
+        if hasattr(self, 'piper') and self.use_piper:
+            return self.piper.is_speaking
+        # Prioridade para o motor Kokoro se estiver em uso
+        if hasattr(self, 'kokoro') and self.use_kokoro:
+            return self.kokoro.is_speaking
         return getattr(self, "_is_speaking_internal", False)
 
     @is_speaking.setter
@@ -73,14 +105,20 @@ class VoiceService:
         """Garante que a thread atual tenha o stream default da GPU bound."""
         mx.set_default_stream(mx.default_stream(mx.gpu))
 
+    def start_listening_mode(self):
+        """Inicia as threads de áudio sem ativar o loop de wake word."""
+        if not hasattr(self, 'threads_started'):
+            threading.Thread(target=self._audio_collector, daemon=True).start()
+            threading.Thread(target=self._audio_processor, daemon=True).start()
+            threading.Thread(target=self._global_audio_watchdog, daemon=True).start()
+            self.threads_started = True
+
     def start_wake_word_detection(self, callback=None):
         if callback:
             self.on_wake_word_detected = callback
         
-        threading.Thread(target=self._audio_collector, daemon=True).start()
-        threading.Thread(target=self._audio_processor, daemon=True).start()
+        self.start_listening_mode()
         threading.Thread(target=self._run_wake_word_loop, daemon=True).start()
-        threading.Thread(target=self._global_audio_watchdog, daemon=True).start()
 
     def _global_audio_watchdog(self):
         """Monitora se o áudio parou de fluir por inatividade de hardware."""
@@ -111,6 +149,11 @@ class VoiceService:
     def _audio_processor(self):
         """Esvazia o buffer de áudio continuamente."""
         while self.running:
+            # Se a escuta ativa estiver ligada, deixamos o áudio no buffer para o listen()
+            if self.is_listening_active:
+                time.sleep(0.1)
+                continue
+
             while not self.audio_buffer.empty():
                 try:
                     chunk = self.audio_buffer.get_nowait()
@@ -153,6 +196,9 @@ class VoiceService:
                         try:
                             energy = np.sqrt(np.mean(audio_data**2))
                             if energy > 0.012:
+                                from core.model_arbiter import arbiter
+                                arbiter.request_model("WHISPER")
+                                
                                 # Usa getattr para segurança caso o modelo não tenha sido carregado
                                 model = getattr(self, "whisper_model", "mlx-community/whisper-large-v3-turbo")
                                 result = mlx_whisper.transcribe(
@@ -198,6 +244,8 @@ class VoiceService:
     def listen(self, continuous_mode=False):
         """Escuta um comando completo. Se continuous_mode=True, escuta imediatamente sem pre-buffer."""
         print("Ouvindo comando...")
+        self.is_listening_active = True
+        self.abort_listen = False # Reset para nova escuta
         start_time = time.time()
         recorded_audio = []
         silence_start = None
@@ -221,6 +269,10 @@ class VoiceService:
             self.wake_word_window = []
 
         while time.time() - start_time < max_duration:
+            if self.abort_listen:
+                print("Escuta interrompida por nova Wake Word.")
+                return None
+
             while not self.audio_buffer.empty():
                 chunk = self.audio_buffer.get()
                 audio_np = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
@@ -234,10 +286,14 @@ class VoiceService:
                 else:
                     silence_start = None
             
-            if silence_start and (time.time() - silence_start > 1.2):
+            if silence_start and (time.time() - silence_start > 0.5):
                 break
             time.sleep(0.01) 
             
+        if self.abort_listen: 
+            self.is_listening_active = False
+            return None
+        
         recorded_audio.extend(silence_pad)
         
         # Filtro de ruído curto
@@ -248,6 +304,9 @@ class VoiceService:
         self._ensure_stream()
         try:
             with mx.stream(mx.default_stream(mx.gpu)):
+                from core.model_arbiter import arbiter
+                arbiter.request_model("WHISPER")
+                
                 audio_data = np.array(recorded_audio, dtype=np.float32)
                 model = getattr(self, "whisper_model", "mlx-community/whisper-large-v3-turbo")
                 result = mlx_whisper.transcribe(
@@ -270,74 +329,73 @@ class VoiceService:
                 return final_text
         except Exception as e:
             print(f"Erro na transcrição: {e}")
+            self.is_listening_active = False
             return None
 
     def stop_speaking(self):
-        """Interrompe a fala nativa imediatamente."""
-        if self.current_playback_process:
-            try:
-                subprocess.run(["killall", "say"], capture_output=True)
-            except:
-                pass
-            self.current_playback_process = None
+        """Interrompe a fala de todos os motores imediatamente."""
+        self.active_session_id += 1
+        self.abort_listen = True
+        
+        # Interrompe Piper
+        if hasattr(self, 'piper'):
+            self.piper.stop_speaking()
+
+        # Interrompe Kokoro
+        if hasattr(self, 'kokoro'):
+            self.kokoro.stop_speaking()
+            
+        try:
+            # killall é a forma mais segura no macOS de parar o 'say' instantaneamente
+            subprocess.run(["killall", "say"], capture_output=True)
+        except:
+            pass
+        self.current_playback_process = None
         self.is_speaking = False
 
     def speak(self, text):
-        """Fala o texto usando a voz padrão do sistema (que o usuário definiu como Siri)."""
-        if not text: 
-            print("DEBUG VOZ: Texto vazio recebido, ignorando.")
-            return
+        """Fala o texto usando a voz nativa do macOS (Siri Masculino) conforme preferência do usuário."""
+        if not text: return
+            
+        # Sinaliza sessão ativa
+        self.is_speaking = True
+        session_at_request = self.active_session_id
         
+        # O usuário prefere a voz masculina nativa (Siri/Daniel/Eddy)
+        # Desativamos Piper e Kokoro para respeitar a preferência por naturalidade nativa
+        self._speak_native(text, session_at_request)
+
+    def _speak_native(self, text, session_at_request):
         def _speak():
             # Lock para evitar que múltiplas falas se sobreponham
-            print(f"DEBUG VOZ: Tentando obter lock para falar...")
             with self.speaking_lock:
-                try:
-                    print(f"DEBUG VOZ: Preparando texto: {text[:50]}...")
-                    # Limpeza ultra-agressiva para garantir que NADA técnico seja falado
-                    clean_text = text
-                    
-                    # 1. Remove qualquer conteúdo entre tags <think> (mesmo que malformadas)
-                    clean_text = re.sub(r'<think>.*?</think>', '', clean_text, flags=re.DOTALL | re.IGNORECASE)
-                    clean_text = re.sub(r'.*?</think>', '', clean_text, flags=re.DOTALL | re.IGNORECASE) # Caso começou no pensamento
-                    clean_text = re.sub(r'<think>.*', '', clean_text, flags=re.DOTALL | re.IGNORECASE) # Caso não fechou
-                    clean_text = clean_text.replace('<think>', '').replace('</think>', '')
-                    
-                    # 2. Remove blocos de código markdown
-                    clean_text = re.sub(r'```.*?```', '', clean_text, flags=re.DOTALL)
-                    
-                    # 3. Remove caracteres de formatação e colchetes (JSON/Tags)
-                    clean_text = re.sub(r'[*#_`~]', '', clean_text)
-                    clean_text = re.sub(r'\[.*?\]', '', clean_text)
-                    clean_text = re.sub(r'\{.*?\}', '', clean_text)
-                    
-                    # 4. Remove termos técnicos de depuração que vazam
-                    tech_terms = ['DEBUG', 'JSON', 'NEED_TRANSLATION', 'assistant', 'user', 'system']
-                    for term in tech_terms:
-                        clean_text = re.sub(rf'\b{term}\b', '', clean_text, flags=re.IGNORECASE)
-                    
-                    # 5. Humanização final
-                    clean_text = clean_text.replace('UI', 'interface').strip()
-                    
-                    # Se após a limpeza o texto for curto demais ou puramente técnico, ignora
-                    if not clean_text or len(clean_text) < 3: 
-                        print("DEBUG VOZ: Texto descartado por ser puramente técnico ou vazio.")
-                        return
+                if session_at_request != self.active_session_id: return
 
+                try:
                     self.is_speaking = True
                     if self.status_callback: self.status_callback("SPEAKING", True)
-
-                    print(f"DEBUG VOZ: EXECUTANDO 'say {clean_text[:30]}...'")
                     
-                    # No macOS, o comando 'say' é muito robusto. 
-                    # Vamos rodar da forma mais simples possível.
-                    process = subprocess.Popen(["say", clean_text])
-                    process.wait()
+                    # Limpeza agressiva para fala fluída (Filtro Anti-Pensamento v2)
+                    clean_text = re.sub(r'<(think|reasoning)>.*?</\1>', '', text, flags=re.DOTALL | re.IGNORECASE)
+                    # Caso a tag não tenha sido fechada
+                    if "<think>" in clean_text.lower():
+                        clean_text = clean_text.lower().split("<think>")[0]
                     
-                    print(f"DEBUG VOZ: Finalizado com sucesso.")
+                    # Remove prefixos comuns de raciocínio
+                    clean_text = re.sub(r'^(Pensamento|Raciocínio|Thought|Análise):.*', '', clean_text, flags=re.IGNORECASE | re.MULTILINE)
+                    
+                    clean_text = re.sub(r'[*#_`~]', '', clean_text)
+                    clean_text = re.sub(r'\[.*?\]', '', clean_text).strip()
+                    
+                    if not clean_text or len(clean_text) < 2: return
 
+                    # Usamos o comando 'say' sem o parâmetro -v para respeitar a voz padrão do sistema
+                    # O usuário deve selecionar 'Siri Masculino' nas Configurações do macOS -> Acessibilidade -> Conteúdo Falado
+                    self.current_playback_process = subprocess.Popen(["say", "--", clean_text])
+                    self.current_playback_process.wait()
+                    self.current_playback_process = None
                 except Exception as e:
-                    print(f"ERRO CRÍTICO VOZ: {e}")
+                    print(f"ERRO VOZ NATIVO: {e}")
                 finally:
                     self.is_speaking = False
                     if self.status_callback: self.status_callback("SPEAKING", False)
