@@ -398,7 +398,7 @@ class VoiceService:
         max_duration = 8 
         energy_threshold = 0.010 
         
-        silence_pad = [0.0] * int(self.RATE * 0.1)
+        silence_pad = [0.0] * int(self.RATE * 0.3)
         
         with self.audio_lock:
             # Se não estamos em modo contínuo, reaproveitamos o áudio que ativou a wake word
@@ -444,7 +444,6 @@ class VoiceService:
         
         # Filtro de ruído curto
         if not recorded_audio or len(recorded_audio) < self.RATE * 0.8: 
-            self.is_listening_active = False
             return None
         
         print("Sintonizando voz...")
@@ -498,7 +497,6 @@ class VoiceService:
                     return None
 
                 print(f"Comando completo: {final_text}")
-                self.is_listening_active = False
                 return final_text
         except Exception as e:
             print(f"Erro na transcrição: {e}")

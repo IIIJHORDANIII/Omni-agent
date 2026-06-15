@@ -250,15 +250,8 @@ class AutoOrganizerService:
         if not os.path.exists(self.watch_path): return
         
         handler = OrganizerHandler(self.watch_path, self.llm_client)
-        
-        if observer:
-            self.observer = observer
-            self.observer.schedule(handler, self.watch_path, recursive=False)
-        else:
-            self.observer = Observer()
-            self.observer.schedule(handler, self.watch_path, recursive=False)
-            self.observer.start()
-            
+        self.observer.schedule(handler, self.watch_path, recursive=False)
+        self.observer.start()
         print(f"Auto-Organizer: Monitorando {self.watch_path}")
 
     def stop(self):

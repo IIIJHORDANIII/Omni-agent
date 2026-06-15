@@ -47,9 +47,6 @@ from core.terminal_server import TerminalOverwatchServer
 from core.recall_service import RecallService
 from core.night_watch import NightWatch
 from core.auto_organizer import AutoOrganizerService
-from core.sentinela_service import SentinelService
-from core.background_agents import BackgroundAgentService
-from core.crawler_service import ProjectCrawlerService
 from ui.ghost_popup import GhostPopup
 
 class MainApp(QApplication):
