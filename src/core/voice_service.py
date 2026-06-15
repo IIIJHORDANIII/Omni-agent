@@ -216,28 +216,23 @@ class VoiceService:
                                         continue
 
                                     if len(text) > 2 and "legendas" not in text:
-                                        # Variações fonéticas de "Omni" e comandos de interrupção
-                                        omni_variants = ["omni", "omini", "homni", "ômine", "homeni", "homine", "amni", "omne", "ominy", "omyni"]
-                                        stop_keywords = ["chega", "para", "parar", "silêncio", "stop", "quieto", "cala a boca"]
-                                        
+                                        # Variações fonéticas de "Omni" no Whisper em PT-BR
+                                        keywords = ["omni", "omini", "homni", "ômine", "homeni", "homine", "amni", "omne", "ominy", "omyni"]
                                         words_in_text = re.sub(r'[^\w\s]', '', text).split()
 
-                                        is_omni = any(kw in words_in_text for kw in omni_variants)
-                                        is_stop = any(kw in words_in_text for kw in stop_keywords)
-
-                                        if is_omni or is_stop:
-                                            print(f"WAKE WORD/STOP DETECTADA: [{text}]")
+                                        if any(kw in words_in_text for kw in keywords):
+                                            print(f"WAKE WORD DETECTADA: [{text}]")
                                             
-                                            # BARGE-IN: Cala a boca imediatamente
-                                            self.stop_speaking()
+                                            # BARGE-IN: Se estava falando, cala a boca imediatamente
+                                            if self.is_speaking:
+                                                self.stop_speaking()
                                             
-                                            # Se for apenas um comando de "chega", não precisamos processar como comando de voz complexo
-                                            # Mas para manter a consistência, deixamos o fluxo seguir, 
-                                            # o LLM saberá responder "Ok" e parar.
-                                            
+                                            # Não falamos "Sim?". Apenas emitimos o sinal de que ouvimos.
                                             if self.on_wake_word_detected:
                                                 self.on_wake_word_detected()
                                                 
+                                            # NÃO limpamos o wake_word_window aqui. Deixamos ele vazar 
+                                            # para o `listen()` para que o comando comece do início.
                                             time.sleep(2.0)
 
                         except Exception as e:
@@ -257,7 +252,7 @@ class VoiceService:
         max_duration = 8 
         energy_threshold = 0.010 
         
-        silence_pad = [0.0] * int(self.RATE * 0.1)
+        silence_pad = [0.0] * int(self.RATE * 0.3)
         
         with self.audio_lock:
             # Se não estamos em modo contínuo, reaproveitamos o áudio que ativou a wake word
@@ -303,7 +298,6 @@ class VoiceService:
         
         # Filtro de ruído curto
         if not recorded_audio or len(recorded_audio) < self.RATE * 0.8: 
-            self.is_listening_active = False
             return None
         
         print("Sintonizando voz...")
@@ -332,7 +326,6 @@ class VoiceService:
                     
                 if len(final_text) < 2: return None
                 print(f"Comando completo: {final_text}")
-                self.is_listening_active = False
                 return final_text
         except Exception as e:
             print(f"Erro na transcrição: {e}")

@@ -40,79 +40,85 @@ class LLMClient:
 
     def get_system_prompt(self):
         ctx = ContextService.get_context_str()
-        
-        # Injeta Habilidade Ativa (agent-skills) se houver
-        from core.skill_manager import SkillManager
-        active_skill = SkillManager.get_active_skill_prompt()
-        return f"""Você é o OMNISCIENT (estilo JARVIS), assistente pessoal do JHORDAN PASTORELLO.
+        return f"""Você é o OMNISCIENT, assistente pessoal para macOS.
 
-REGRAS CRÍTICAS:
-1. PENSAMENTO INTUITIVO: Antes de qualquer ação, pare e pense. Use ferramentas de busca se faltar contexto.
-2. RACIOCÍNIO SOTA (ReAct): Você opera em um loop. OBRIGATORIAMENTE comece sua resposta com um bloco `<think> ... </think>` explicando sua lógica passo a passo.
-3. AÇÃO: Após o pensamento, se precisar agir, coloque a chamada de ferramenta EM UM ÚNICO BLOCO JSON.
-   EXEMPLO DE RESPOSTA COM FERRAMENTA:
-   <think>
-   1. Preciso achar o arquivo.
-   2. Vou usar a busca inteligente.
-   </think>
-   [{{\"tool\": \"smart_search\", \"params\": {{\"query\": \"projeto\"}}}}]
-4. IDIOMA: Responda SEMPRE em Português (Brasil) natural e elegante.
-5. RESPOSTA FINAL: Se não precisar de mais ferramentas, responda ao usuário (sem JSON).
+PROTOCOLO DE RESPOSTA (OBRIGATÓRIO):
+1. <think> Sua análise interna (qualquer idioma). </think>
+2. RESPOSTA FINAL: Apenas Português (Brasil).
+3. AÇÕES: Se precisar usar uma ferramenta, você PODE falar uma frase curta em PT-BR e DEVE incluir o JSON: [{{"tool": "nome", "params": {{...}} }}].
+4. PROIBIDO: Explicar quem você é ou usar meta-conversa (ex: "Entendido, vou fazer...").
+5. Se for apenas conversa, seja direto e amigável.
 
 LISTA DE FERRAMENTAS DISPONÍVEIS:
-- vscode_sync(): Descobre qual arquivo e projeto está aberto no VS Code agora.
-- auto_github_pr(title, body): Cria um PR no GitHub automaticamente.
-- smart_search(query): Busca FUZZY/INTELIGENTE em todo o Mac via Spotlight.
-- memory_query(key): Busca na memória de longo prazo.
-- memory_write(key, value): Salva um fato importante.
-- resolve_path(name): Busca uma pasta no Mac.
-- open_app(app, path): Abre um app.
-- open_url(url, browser): Abre um site.
-- web_search(query): Busca na web.
+- open_app(app): Abre um app no Mac.
+- open_url(url): Abre um site ou link.
+- control_app(app, action): UI Scripting (ex: click menu "File").
+- web_search(query): Busca na web e resume.
+- web_read(url): Lê o conteúdo de uma página web.
 - mail_unread(count): E-mails não lidos de hoje.
+- mail_search(query): Busca e-mails por assunto/remetente.
 - mail_draft(subject, body, recipient): Cria rascunho de e-mail.
-- github_pr_details(repo, pr): Detalhes de PRs.
-- linear_my_issues(): Suas tarefas no Linear.
-- analyze_screen(): Vê a tela agora.
-- notes_search(query): Busca notas no app Notas.
-- create_note(title, content): Cria uma nota real no macOS.
-- generate_image(prompt): Gera imagem IA localmente.
-- swarm_solve(task): Ativa sub-agentes para problemas complexos.
-- vision_action(action, x, y, text): Age fisicamente na tela.
-- run_shell(command): Executa shell no Mac. Use PersistentShell para manter estado de diretório.
+- notes_search(query): Busca nas Notas do macOS.
+- create_note(title, content): Cria nota ou arquivo de texto (.txt).
+- list_files(path): Lista arquivos de um diretório.
+- read_file(path): Lê o conteúdo de um arquivo.
+- analyze_screen(): Descreve o que está na tela agora.
+- get_calendar_events(): Eventos do calendário de hoje.
+- get_reminders(): Lembretes pendentes.
+- add_reminder(title): Adiciona lembrete.
+- set_volume(level): Ajusta volume do sistema (0-100).
+- run_shell(command): Executa comando no terminal macOS.
+- run_python(code): Executa código Python em sandbox.
+- run_tests(path): Roda testes (pytest, npm, cargo).
+- github_commits(repo): Commits recentes de um repo.
+- github_list_prs(repo): Lista Pull Requests abertos.
+- github_create_pr(repo, title, head, base, body): Cria um PR no GitHub.
+- linear_my_issues(): Suas tarefas pendentes no Linear.
+- linear_cycle: Resumo do ciclo atual do Linear.
+- project_summary(path): Resumo técnico do projeto (Git + Logs).
+- manage_music(app, action): Controla Spotify/Music (play, pause, next).
+- get_system_info(): Status de bateria e disco.
+- move_window(app, x, y, w, h): Move janela via Swift.
+- toggle_mute(): Alterna mudo do microfone.
+- run_shortcut(name, input): Executa um Atalho do macOS.
+- list_shortcuts(): Lista todos os seus Atalhos salvos.
+- set_focus(mode): Ativa um Modo de Foco (ex: "Não Perturbe", "Trabalho").
+- screenshot(path): Tira um print da tela inteira.
+- download_file(url, path): Baixa um arquivo ou imagem da internet.
+- generate_image(prompt, output): Gera uma imagem via Stable Diffusion local.
+- media_cut(input, start, duration, output): Corta vídeo/áudio via FFmpeg (start: "00:00:10").
+- media_to_mp3(input, output): Converte arquivo de mídia para MP3.
+- create_tool(requirement): Protocolo Gênesis (Cria ferramenta do zero).
 
-DADOS DO MAC:
+CONTEXTO DO MAC:
 {ctx}
-
-ALIASED: 
-- PPRD = repositório weboptionwp/app-payjota.
-- PJ ou PAYJOTA = pasta /Users/pastorello/Documents/pessoal/agent ou similar em Documents.
-- FPJ = subpasta de projeto dentro de PJ.
 """
 
 
     def _clean_response(self, text, is_translation_pass=False):
         if not text: return ""
         
-        # 1. Extração de JSON se presente (Prioridade máxima no loop ReAct)
-        json_match = re.search(r'[\[\{].*(tool|action).*[\]\}]', text, re.DOTALL)
-        if json_match and not is_translation_pass:
-            return text[json_match.start():json_match.end()].strip()
-
-        # 2. Limpeza agressiva de tags e marcadores de pensamento
-        # Remove blocos <think>...</think> ou <reasoning>...</reasoning>
-        clean_text = re.sub(r'<(think|reasoning)>.*?</\1>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        # 1. Limpeza agressiva de tags de pensamento
+        clean_text = text.replace('</think>', ' </think> ').strip()
         
-        # Remove marcadores de texto comuns que o DeepSeek ou outros modelos usam às vezes
-        patterns_to_remove = [
-            r'^Pensamento:.*?\n', 
-            r'^Raciocínio:.*?\n', 
-            r'^Thought:.*?\n',
-            r'\n\nPensamento:.*',
-            r'\n\nThought:.*'
-        ]
-        for pattern in patterns_to_remove:
-            clean_text = re.sub(pattern, '', clean_text, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        if "<think>" in clean_text:
+            if "</think>" in clean_text:
+                parts = clean_text.split("</think>")
+                clean_text = parts[-1].strip()
+            else:
+                # Se não fechou, tenta pegar o que vem depois do início do pensamento ou o primeiro JSON
+                start_idx = clean_text.find("<think>")
+                json_start = clean_text.find("[", start_idx)
+                if json_start != -1:
+                    clean_text = clean_text[json_start:]
+                else:
+                    clean_text = clean_text[start_idx+7:].strip()
+        
+        # 2. Extração de JSON se presente (Prioridade máxima)
+        json_match = re.search(r'[\[\{].*tool.*[\]\}]', clean_text, re.DOTALL)
+        if json_match and not is_translation_pass:
+            # Retorna apenas o JSON para o Dispatcher
+            return clean_text[json_match.start():json_match.end()].strip()
 
         # Caso a tag não tenha sido fechada (streaming ou erro de geração)
         if "<think>" in clean_text.lower():
@@ -150,19 +156,30 @@ ALIASED:
             else:
                 context_history = messages[-10:]
             
-            full_messages.extend(context_history)
+            clean_answer = self._clean_response(answer)
+
+            # Se for um JSON de ferramenta, pulamos a verificação de tradução e vamos direto pro dispatch
+            has_json = "{" in clean_answer and ("tool" in clean_answer or "action" in clean_answer)
             
-            print(f"DEBUG LLM: Iniciando geração (ReAct Loop)...")
-            
-            max_iterations = 5
-            iteration = 0
-            final_response = ""
-            
-            while iteration < max_iterations:
-                iteration += 1
+            if not has_json:
+                # MECANISMO DE TRADUÇÃO PARA RESPOSTA DIRETA
+                is_english = clean_answer.startswith("__NEED_TRANSLATION__") or (len(clean_answer) > 40 and not any(c in clean_answer for c in "áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ"))
                 
-                answer_raw = self.manager.generate_command(full_messages)
-                answer = self._clean_response(answer_raw)
+                if is_english:
+                    original_text = clean_answer.replace("__NEED_TRANSLATION__", "")
+                    print(f"DEBUG: Texto em Inglês detectado. Traduzindo...")
+                    translation_prompt = f"Traduza este texto para PORTUGUÊS (BRASIL). Responda APENAS a tradução direta, sem comentários: {original_text}"
+                    translated = self.manager.generate_command(translation_prompt, system_context="SISTEMA_DE_TRADUCAO_PURAMENTE_EM_PORTUGUES_SEM_META_TALK")
+                    clean_answer = self._clean_response(translated, is_translation_pass=True)
+
+            if has_json:
+                print(f"DEBUG: JSON detectado. Executando...")
+                tool_result = ToolDispatcher.dispatch(clean_answer)
+                
+                # 2. Segunda Passada (Síntese) - Aqui usamos o histórico também
+                synthesis_messages = full_messages.copy()
+                synthesis_messages.append({"role": "assistant", "content": clean_answer})
+                synthesis_messages.append({"role": "user", "content": f"Resultado das ferramentas: {tool_result}. Agora responda ao usuário de forma natural e amigável em Português (Brasil). NÃO responda com JSON nem com blocos de código ou raciocínio."})
                 
                 # Verifica se há chamada de ferramenta
                 has_json = "{" in answer and ("tool" in answer or "action" in answer)
