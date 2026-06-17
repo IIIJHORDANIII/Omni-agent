@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import subprocess
 import threading
@@ -29,9 +30,15 @@ class CodeQualityHandler(FileSystemEventHandler):
         print(f"Background Agent: Revisando {rel_path}...")
         
         cmd = []
+        use_fallback = False
         if ext == '.py':
-            # Usa Ruff (muito rápido) se disponível, senão flake8
-            cmd = ["ruff", "check", file_path]
+            # Tenta ruff se disponivel, senao usa py_compile
+            import shutil
+            if shutil.which("ruff"):
+                cmd = ["ruff", "check", file_path]
+            else:
+                use_fallback = True
+                cmd = [sys.executable, "-m", "py_compile", file_path]
         elif ext in ['.ts', '.js', '.tsx', '.jsx']:
             cmd = ["npx", "eslint", file_path, "--quiet"]
             
@@ -40,10 +47,8 @@ class CodeQualityHandler(FileSystemEventHandler):
         try:
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                # Encontrou problemas! Avisa no HUD de forma discreta
                 msg = f"Problema detectado em {os.path.basename(file_path)}"
                 self.main_app.hud.display_signal.emit(msg, "THINKING", 4000)
-                # Opcional: registrar na memória para o briefing
                 self.main_app.chat_window.llm_client.memory_client.store_observation(
                     f"Erro de linting em {rel_path}: {result.stdout[:100]}"
                 )
@@ -54,19 +59,18 @@ class BackgroundAgentService:
     """Orquestrador de agentes que rodam sem intervenção do usuário."""
     def __init__(self, main_app):
         self.main_app = main_app
-        self.target_project = os.path.expanduser("~/Documents/pessoal/payjota/app-payjota")
+        self.target_project = os.path.expanduser(
+            os.getenv("TARGET_PROJECT", "~/Documents/pessoal")
+        )
         self.running = False
 
     def start(self, observer):
         if not os.path.exists(self.target_project):
-            print(f"Aviso: Projeto {self.target_project} não encontrado para monitoramento de background.")
             return
 
-        # 1. Inicia o Linting Watcher
         quality_handler = CodeQualityHandler(self.main_app, self.target_project)
         observer.schedule(quality_handler, self.target_project, recursive=True)
         
-        # 2. Inicia o Dependency Scout (roda a cada 24h ou no startup)
         threading.Thread(target=self._run_dependency_scout, daemon=True).start()
         
         self.running = True

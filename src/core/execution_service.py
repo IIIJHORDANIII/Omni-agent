@@ -2,32 +2,62 @@ import subprocess
 import os
 import socket
 import json
+import re
+import time
+
+# Caracteres perigosos que nao devem aparecer em argumentos de shell
+_DANGEROUS_CHARS = re.compile(r'[;&|`$(){}!<>\\]')
 
 class ExecutionService:
+    @staticmethod
+    def _validate_args(args_str):
+        """Valida que argumentos nao contem caracteres perigosos de shell injection."""
+        if _DANGEROUS_CHARS.search(args_str):
+            raise ValueError(f"Argumento contem caracteres perigosos: {args_str}")
+        return True
+
     @staticmethod
     def run_terminal_command(command):
         """Executa um comando no terminal do macOS."""
         try:
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
+            # Usa lista de argumentos em vez de shell=True quando possivel
+            if isinstance(command, str):
+                # Para comandos simples, divide em lista
+                parts = command.split()
+                if len(parts) <= 1 or parts[0] in ('ls', 'cat', 'grep', 'find', 'mdfind', 'pwd', 'whoami', 'df', 'pmset', 'head', 'tail'):
+                    result = subprocess.run(parts, capture_output=True, text=True, timeout=15)
+                else:
+                    # Para comandos complexos, mantem shell=True com timeout
+                    result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=15)
+            else:
+                result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=15)
             return {
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "exit_code": result.returncode
             }
+        except subprocess.TimeoutExpired:
+            return {"error": "Comando expirou apos 15 segundos", "exit_code": -1}
         except Exception as e:
             return {"error": str(e)}
 
     @staticmethod
     def clear_notes():
-        """Apaga o conteúdo da nota mais recente ou deleta todas as notas da pasta padrão."""
+        """Apaga TODAS as notas de todas as contas do app Notas do macOS."""
         script = '''
         tell application "Notes"
             try
-                set theFolder to folder "Notes"
-                delete every note of theFolder
-                return "Todas as notas da pasta 'Notes' foram excluídas."
-            on error
-                return "Não foi possível excluir as notas ou a pasta não foi encontrada."
+                -- Tenta deletar notas de todas as contas para ser global
+                set accountsCount to count of accounts
+                repeat with i from 1 to accountsCount
+                    set theAccount to account i
+                    try
+                        delete every note of theAccount
+                    end try
+                end repeat
+                return "Sucesso: Todas as notas de todas as contas foram movidas para a lixeira."
+            on error err
+                return "Erro ao excluir notas: " & err
             end try
         end tell
         '''
@@ -57,13 +87,14 @@ class ExecutionService:
     @staticmethod
     def type_text(text):
         """Tenta digitar nativamente se for Notas, senão usa System Events."""
-        # Se o app Notes estiver na frente, tenta adicionar o texto à nota atual
+        # Escapa aspas e barras para AppleScript
+        safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
         script = f'''
         if application "Notes" is running then
             tell application "Notes"
                 if (count of notes) > 0 then
                     set theNote to note 1 of folder "Notes"
-                    set body of theNote to (body of theNote & "{text}")
+                    set body of theNote to (body of theNote & "{safe_text}")
                     return "Texto adicionado à nota nativamente."
                 end if
             end tell
@@ -119,15 +150,13 @@ class ExecutionService:
 
     @staticmethod
     def open_app(app_name, path=None):
-        """Abre um aplicativo, permitindo passar um caminho opcional (pasta/arquivo)."""
+        """Abre um aplicativo e traz para primeiro plano via AppleScript."""
         if not app_name or "org.python.python" in app_name.lower():
             return {"error": "Nome de aplicativo inválido ou bloqueado."}
             
-        # Se o LLM se confundir e passar uma URL no lugar do app
         if app_name.startswith("http"):
             return ExecutionService.open_url(app_name)
             
-        # Mapeamento de nomes comuns
         app_map = {
             "notas": "Notes", "notes": "Notes",
             "calendário": "Calendar", "calendar": "Calendar",
@@ -138,21 +167,34 @@ class ExecutionService:
         }
         
         target = app_map.get(app_name.lower(), app_name)
-        cmd = ["open", "-a", target]
+        
+        # Método principal: AppleScript (abre + ativa em um comando)
+        as_script = f'tell application "{target}" to activate'
         if path:
             full_path = os.path.expanduser(path)
-            cmd.append(full_path)
-
+            as_script = f'tell application "{target}" to activate\ntell application "Finder" to open POSIX file "{full_path}"'
+        
         try:
-            subprocess.run(cmd, check=True, capture_output=True)
-            return {"stdout": f"Aplicativo {target} aberto." + (f" Caminho: {path}" if path else "")}
+            result = subprocess.run(
+                ["osascript", "-e", as_script],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                import time; time.sleep(0.3)
+                return {"stdout": f"Aplicativo {target} aberto e em primeiro plano."}
         except Exception as e:
-            # Tenta fallback sem o '-a' se for um caminho direto ou comando
-            try:
-                if path:
-                    subprocess.run(["open", path], check=True)
-                    return {"stdout": f"Caminho {path} aberto com app padrão."}
-            except: pass
+            print(f"open_app: AppleScript falhou ({e}), tentando fallback...")
+        
+        # Fallback: open -a + activate separado
+        try:
+            subprocess.run(["open", "-a", target], check=True, capture_output=True, timeout=10)
+            subprocess.run(
+                ["osascript", "-e", f'tell application "{target}" to activate'],
+                capture_output=True, timeout=5
+            )
+            import time; time.sleep(0.3)
+            return {"stdout": f"Aplicativo {target} aberto."}
+        except Exception as e:
             return {"error": f"Falha ao abrir {app_name}: {str(e)}"}
 
     @staticmethod
@@ -182,7 +224,8 @@ class ExecutionService:
     @staticmethod
     def add_reminder(title):
         """Adiciona um lembrete ao app Lembretes do macOS."""
-        script = f'tell application "Reminders" to make new reminder with properties {{name:"{title}"}}'
+        safe_title = title.replace('\\', '\\\\').replace('"', '\\"')
+        script = f'tell application "Reminders" to make new reminder with properties {{name:"{safe_title}"}}'
         return ExecutionService.run_applescript(script)
 
     @staticmethod
@@ -314,10 +357,11 @@ class ExecutionService:
     @staticmethod
     def mail_search(query):
         """Busca e-mails sem abrir a interface do Mail."""
+        safe_query = query.replace('\\', '\\\\').replace('"', '\\"')
         script = f'''
         set appRunning to application "Mail" is running
         tell application "Mail"
-            set foundMessages to (every message of inbox whose subject contains "{query}" or sender contains "{query}")
+            set foundMessages to (every message of inbox whose subject contains "{safe_query}" or sender contains "{safe_query}")
             set out to ""
             set m_count to count of foundMessages
             if m_count > 5 then set m_count to 5
@@ -334,11 +378,13 @@ class ExecutionService:
     @staticmethod
     def send_imessage(target, message):
         """Envia uma iMessage para um contato ou número."""
+        safe_target = target.replace('\\', '\\\\').replace('"', '\\"')
+        safe_message = message.replace('\\', '\\\\').replace('"', '\\"')
         script = f'''
         tell application "Messages"
             set targetService to 1st service whose service type is iMessage
-            set targetBuddy to buddy "{target}" of targetService
-            send "{message}" to targetBuddy
+            set targetBuddy to buddy "{safe_target}" of targetService
+            send "{safe_message}" to targetBuddy
         end tell
         '''
         return ExecutionService.run_applescript(script)
@@ -369,12 +415,15 @@ class ExecutionService:
     @staticmethod
     def mail_create_draft(subject, body, recipient=""):
         """Cria um rascunho de e-mail no app Mail."""
+        safe_subject = subject.replace('\\', '\\\\').replace('"', '\\"')
+        safe_body = body.replace('\\', '\\\\').replace('"', '\\"')
+        safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
         script = f'''
         tell application "Mail"
-            set newMessage to make new outgoing message with properties {{subject:"{subject}", content:"{body}", visible:true}}
+            set newMessage to make new outgoing message with properties {{subject:"{safe_subject}", content:"{safe_body}", visible:true}}
             tell newMessage
-                if "{recipient}" is not "" then
-                    make new to recipient at end of to recipients with properties {{address:"{recipient}"}}
+                if "{safe_recipient}" is not "" then
+                    make new to recipient at end of to recipients with properties {{address:"{safe_recipient}"}}
                 end if
             end tell
             return "Rascunho criado."
@@ -446,26 +495,112 @@ class ExecutionService:
 
     @staticmethod
     def run_git(args):
-        """Executa comandos Git (ex: status, commit, diff)."""
-        command = f"git {args}"
-        return ExecutionService.run_terminal_command(command)
+        """Executa comandos Git de forma segura (ex: status, commit, diff)."""
+        # Whitelist de subcomandos git permitidos
+        allowed_subcommands = [
+            'status', 'log', 'diff', 'branch', 'checkout', 'add', 'commit',
+            'push', 'pull', 'fetch', 'merge', 'rebase', 'stash', 'show',
+            'rev-parse', 'remote', 'tag', 'ls-files', 'blame'
+        ]
+        parts = args.strip().split()
+        if not parts:
+            return {"error": "Nenhum argumento fornecido"}
+        subcmd = parts[0]
+        if subcmd not in allowed_subcommands:
+            return {"error": f"Subcomando git '{subcmd}' nao e permitido"}
+        # Valida argumentos extras
+        for arg in parts[1:]:
+            if _DANGEROUS_CHARS.search(arg):
+                return {"error": f"Argumento git invalido: {arg}"}
+        command = ["git"] + parts
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            return {
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "exit_code": result.returncode
+            }
+        except subprocess.TimeoutExpired:
+            return {"error": "Comando git expirou apos 30 segundos", "exit_code": -1}
+        except Exception as e:
+            return {"error": str(e)}
 
     @staticmethod
     def execute_python(code):
-        """Roda código Python arbitrário e retorna o output."""
+        """Roda código Python em sandbox restrito e retorna o output."""
+        import sys
+        import io
+        import traceback
+
+        # Bloqueio de padrões perigosos
+        dangerous_patterns = [
+            'import os', 'import subprocess', 'import shutil',
+            '__import__', 'exec(', 'eval(', 'compile(',
+            'open(', 'os.system', 'subprocess.run', 'subprocess.Popen',
+            'os.remove', 'os.unlink', 'rmdir', 'shutil.rmtree'
+        ]
+        code_lower = code.lower()
+        for pattern in dangerous_patterns:
+            if pattern in code_lower:
+                return f"Erro de seguranca: operacao '{pattern}' nao e permitida no sandbox Python."
+
+        # Restringe builtins perigosas
+        restricted_builtins = {
+            '__import__': None,
+            'exec': None,
+            'eval': None,
+            'compile': None,
+            'open': None,
+            'breakpoint': None,
+        }
+
+        sandbox_globals = {
+            '__builtins__': {
+                k: v for k, v in __builtins__.items()
+                if k not in restricted_builtins
+            } if isinstance(__builtins__, dict) else __builtins__,
+            'print': print,
+            'range': range,
+            'len': len,
+            'str': str,
+            'int': int,
+            'float': float,
+            'list': list,
+            'dict': dict,
+            'tuple': tuple,
+            'set': set,
+            'bool': bool,
+            'sum': sum,
+            'min': min,
+            'max': max,
+            'abs': abs,
+            'round': round,
+            'sorted': sorted,
+            'enumerate': enumerate,
+            'zip': zip,
+            'map': map,
+            'filter': filter,
+            'any': any,
+            'all': all,
+            'isinstance': isinstance,
+            'type': type,
+            'hasattr': hasattr,
+            'getattr': getattr,
+        }
+
         try:
-            import sys
-            import io
-            # Redireciona stdout para capturar o print
             old_stdout = sys.stdout
             redirected_output = sys.stdout = io.StringIO()
-            
-            exec(code)
-            
+
+            exec(code, sandbox_globals)
+
             sys.stdout = old_stdout
-            return redirected_output.getvalue() or "Código executado com sucesso (sem output)."
+            output = redirected_output.getvalue()
+            return output if output else "Codigo executado com sucesso (sem output)."
         except Exception as e:
-            return f"Erro na execução Python: {e}"
+            sys.stdout = old_stdout
+            tb = traceback.format_exc()
+            return f"Erro na execucao Python:\n{tb}"
 
     @staticmethod
     def manage_clipboard(action, text=None):
@@ -518,6 +653,8 @@ class ExecutionService:
     def manage_hardware(action, value=None):
         """Controla brilho e modo foco via AppleScript."""
         if action == "set_brightness":
+            if value is None:
+                return "Erro: value nao especificado para set_brightness"
             script = f'tell application "System Events" to repeat {int(value/10)} times \\n key code 14 \\n end repeat' # Simplificado
             return ExecutionService.run_applescript(script)
         elif action == "do_not_disturb":

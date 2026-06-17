@@ -1,9 +1,13 @@
 import subprocess
 import os
-import pyperclip
 from datetime import datetime
 from core.execution_service import ExecutionService
 from core.system_monitor import SystemMonitor
+
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
 
 class ContextService:
     @staticmethod
@@ -20,6 +24,8 @@ class ContextService:
     @staticmethod
     def get_clipboard():
         """Retorna os primeiros 100 caracteres do clipboard."""
+        if pyperclip is None:
+            return "pyperclip não instalado"
         try:
             content = pyperclip.paste().strip()
             if content:

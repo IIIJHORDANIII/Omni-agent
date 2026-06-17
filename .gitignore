@@ -27,6 +27,7 @@ share/python-wheels/
 MANIFEST
 OmniscientAgent.spec
 OmniscientAgent.pkg
+*.dmg
 
 # Virtual Environments
 venv/
@@ -67,3 +68,6 @@ src/models/piper/*.json
 # Swift build directories
 SwiftAgent/.build/
 SwiftAgent/.swiftpm/
+
+# Memory and Session Data
+memory_db/

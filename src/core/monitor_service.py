@@ -13,10 +13,10 @@ class MonitorService:
         self.hud = hud
         self.running = False
         self.thread = None
-        # Intervalo entre pensamentos proativos (segundos)
-        self.think_interval = 300  # 5 minutos por padrão
+        # Intervalo entre pensamentos proativos (segundos) - Reduzido para ser menos intrusivo
+        self.think_interval = 3600  # 1 hora por padrão (Oracle Mode)
         # Intervalo para o Watchdog Visual rápido (segundos)
-        self.watchdog_interval = 30 
+        self.watchdog_interval = 600 # 10 minutos (Evita uso excessivo de hardware)
 
     def start(self):
         """Inicia o ciclo de monitoramento proativo."""
@@ -49,7 +49,7 @@ class MonitorService:
                     last_think_time = current_time
                     
             except Exception as e:
-                print(f"Erro no loop do Sentinela: {e}")
+                print(f"Erro no loop do Monitor de Sistema (Oracle Mode): {e}")
             
             time.sleep(self.watchdog_interval)
 

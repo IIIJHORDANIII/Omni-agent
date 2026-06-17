@@ -1,25 +1,36 @@
 from core.tool_registry import tool_registry
 from core.execution_service import ExecutionService
-from core.github_service import GithubService
-from core.linear_service import LinearService
 
-github = GithubService()
-linear = LinearService()
+try:
+    from core.github_service import GithubService
+    github = GithubService()
+except ImportError:
+    github = None
+
+try:
+    from core.linear_service import LinearService
+    linear = LinearService()
+except ImportError:
+    linear = None
 
 @tool_registry.register(name="github_list_prs")
 def github_list_prs(repo="", repository=""):
+    if not github: return "GitHub nao disponivel (PyGithub nao instalado)."
     return github.get_pull_requests(repo or repository)
 
 @tool_registry.register(name="github_pr_details")
 def github_pr_details(repo="", repository="", pr=0, number=0):
+    if not github: return "GitHub nao disponivel (PyGithub nao instalado)."
     return github.get_pr_details(repo or repository, pr or number)
 
 @tool_registry.register(name="github_commits")
 def github_commits(repo="", repository="", count=5):
+    if not github: return "GitHub nao disponivel (PyGithub nao instalado)."
     return github.get_recent_commits(repo or repository, count)
 
 @tool_registry.register(name="linear_my_issues")
 def linear_my_issues():
+    if not linear: return "Linear nao disponivel."
     return linear.get_my_issues()
 
 @tool_registry.register(name="run_tests")
