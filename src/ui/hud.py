@@ -1,269 +1,244 @@
-import math
-import time
-import numpy as np
 from PyQt6.QtWidgets import QWidget, QLabel, QHBoxLayout, QFrame, QVBoxLayout
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QFont, QPen
-from core.system_monitor import SystemMonitor
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QColor, QFont
+from ui.voice_overlay import VoiceOverlay
 
 try:
-    from AppKit import NSVisualEffectView, NSVisualEffectMaterial, NSVisualEffectState
+    from AppKit import (
+        NSVisualEffectView, NSVisualEffectMaterial, NSVisualEffectState,
+        NSVisualEffectBlendingMode,
+        NSViewWidthSizable, NSViewHeightSizable
+    )
+    import objc
+    from ctypes import c_void_p
     HAS_NATIVE_BLUR = True
 except ImportError:
     HAS_NATIVE_BLUR = False
 
-class AudioWaveformBar(QWidget):
-    """Tarja de áudio animada e compacta."""
-    def __init__(self):
-        super().__init__()
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | 
-            Qt.WindowType.WindowStaysOnTopHint | 
-            Qt.WindowType.Tool |
-            Qt.WindowType.WindowDoesNotAcceptFocus |
-            Qt.WindowType.WindowTransparentForInput
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(180, 28)
-        
-        self.level = 0.0
-        self.target_level = 0.0
-        self.is_listening = False
-        self.status_text = ""
-        self.voice_service = None
-        
-        self.anim_timer = QTimer()
-        self.anim_timer.timeout.connect(self._animate)
-        self.anim_timer.start(33)
-        
-        self.audio_timer = QTimer()
-        self.audio_timer.timeout.connect(self._read_audio)
-        self.audio_timer.start(50)
-        
-        self.hide()
-    
-    def start_monitoring(self, voice_service):
-        self.voice_service = voice_service
-    
-    def _read_audio(self):
-        if not self.voice_service or self.voice_service.audio_buffer.empty():
-            self.target_level *= 0.8
-            return
-        try:
-            chunk = self.voice_service.audio_buffer.get_nowait()
-            audio_np = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
-            energy = min(1.0, np.sqrt(np.mean(audio_np**2)) * 15)
-            self.target_level = energy
-        except:
-            pass
-    
-    def _animate(self):
-        self.level += (self.target_level - self.level) * 0.3
-        if self.level > 0.01:
-            self.update()
-    
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        p.setBrush(QColor(15, 15, 25, 220))
-        p.setPen(QPen(QColor(0, 212, 255, 60), 1))
-        p.drawRoundedRect(0, 0, self.width(), 18, 6, 6)
-        
-        bars = 22
-        bar_w = 3
-        gap = 4
-        total = bars * (bar_w + gap)
-        start_x = (self.width() - total) // 2
-        
-        for i in range(bars):
-            phase = math.sin(i * 0.4 + time.time() * 4) * 0.5 + 0.5
-            h = max(2, int(self.level * 14 * phase))
-            
-            x = start_x + i * (bar_w + gap)
-            y = 9 - h // 2
-            
-            if self.is_listening:
-                c = QColor(255, 59, 48, 180)
-            else:
-                c = QColor(0, 212, 255, 180)
-            
-            p.setBrush(c)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(x, y, bar_w, h, 1, 1)
-        
-        if self.status_text:
-            p.setPen(QColor(255, 255, 255, 120))
-            p.setFont(QFont("Avenir Next", 7))
-            p.drawText(0, 19, self.width(), 9, Qt.AlignmentFlag.AlignCenter, self.status_text)
-        
-        p.end()
-    
-    def show_state(self, state="LISTENING"):
-        self.is_listening = (state == "LISTENING")
-        self.status_text = "gravando..." if state == "LISTENING" else "falando..."
-        
-        screen = self.screen().geometry()
-        self.move(screen.width() - 200, 55)
-        self.show()
+
+def _apple_stylesheet():
+    return """
+        QFrame#HudContainer {
+            background-color: rgba(0, 0, 0, 0.75);
+            border: 0.5px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+        }
+    """
+
 
 class HUDOverlay(QWidget):
-    # ... (sinais e init seguem iguais)
-    display_signal = pyqtSignal(str, str, int) # text, state, duration
-    context_signal = pyqtSignal(dict) # dict com file, linear, github
-    voice_signal = pyqtSignal(str, bool) # state, visible
+    display_signal = pyqtSignal(str, str, int)
+    context_signal = pyqtSignal(dict)
+    voice_signal = pyqtSignal(str, bool)
 
     def __init__(self):
         super().__init__()
-        self.is_dark = True 
-        
-        # Timer para esconder o HUD com segurança
+        self._visible = False
+
         self.hide_timer = QTimer()
         self.hide_timer.setSingleShot(True)
-        self.hide_timer.timeout.connect(self.hide)
-        
-        # Voice Indicator (AudioWaveformBar)
-        self.voice_indicator = AudioWaveformBar()
-        
+        self.hide_timer.timeout.connect(self._fade_out)
+
+        self.voice_overlay = VoiceOverlay()
+
         self.display_signal.connect(self.update_hud)
         self.context_signal.connect(self.update_context_wall)
-        self.voice_signal.connect(self._handle_voice_indicator)
-        
-        self.init_ui()
-    
-    def connect_voice_service(self, voice_service):
-        """Conecta o VoiceService ao indicador de áudio."""
-        self.voice_indicator.start_monitoring(voice_service)
+        self.voice_signal.connect(self._handle_voice_overlay)
 
-    def _handle_voice_indicator(self, state, visible):
+        self._init_ui()
+
+    def _handle_voice_overlay(self, state, visible):
         if visible:
-            self.voice_indicator.show_state(state)
+            self.voice_overlay.set_state(state.lower())
+            # Esconde o container principal para priorizar a wave em estados ativos
+            if state.lower() in ["listening", "thinking", "processing", "speaking"]:
+                self.container.hide()
         else:
-            self.voice_indicator.hide()
+            self.voice_overlay.set_state("idle")
+            self.container.show()
 
-    def apply_vibrancy(self):
-        """Desativado temporariamente para corrigir bug do quadrado preto/blur."""
-        return
-
-    def init_ui(self):
+    def _init_ui(self):
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | 
-            Qt.WindowType.WindowStaysOnTopHint | 
-            Qt.WindowType.Tool |
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.ToolTip | # Garante persistência no macOS flutuando sobre tudo
             Qt.WindowType.WindowDoesNotAcceptFocus |
             Qt.WindowType.WindowTransparentForInput
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) # Click-through total
+
+        # LARGURA UNIFICADA: 180px
+        self.setFixedWidth(180)
         
-        # Cores JARVIS
-        text_color = "white"
-        accent_color = "#00d4ff"
-        
-        self.main_layout = QHBoxLayout(self)
-        self.main_layout.setContentsMargins(20, 10, 20, 10)
-        self.main_layout.setSpacing(15)
-        
-        # --- MENSAGENS (CONTAINER PRINCIPAL - ESTILO VIDRO) ---
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+
         self.container = QFrame()
-        self.container.setObjectName("MainContainer")
-        self.container.setStyleSheet(f"""
-            QFrame#MainContainer {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(25, 25, 45, 240), stop:1 rgba(10, 10, 20, 255));
-                border: 1px solid rgba(0, 212, 255, 120);
-                border-radius: 12px;
-                min-width: 250px;
-            }}
+        self.container.setObjectName("HudContainer")
+        self.container.setStyleSheet(_apple_stylesheet())
+
+        inner = QVBoxLayout(self.container)
+        inner.setContentsMargins(14, 10, 14, 10)
+        inner.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+
+        self.status_dot = QFrame()
+        self.status_dot.setFixedSize(10, 10)
+        self._set_dot_color("#34c759")
+
+        self.label = QLabel("Anders Operacional")
+        self.label.setStyleSheet("""
+            QLabel {
+                color: rgba(255, 255, 255, 0.92);
+                font-size: 13px;
+                font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+                font-weight: 600;
+            }
         """)
-        inner_layout = QHBoxLayout(self.container)
-        inner_layout.setContentsMargins(20, 10, 25, 10)
-        
-        # Indicador de Status (Círculo Neon)
-        self.indicator = QFrame()
-        self.indicator.setFixedSize(10, 10)
-        self.indicator.setStyleSheet(f"background-color: {accent_color}; border-radius: 5px; border: 1px solid white;")
-        
-        self.label = QLabel("OMNISCIENT OPERACIONAL")
-        self.label.setStyleSheet(f"color: {text_color}; font-size: 13px; font-family: 'Avenir Next'; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;")
-        
-        inner_layout.addWidget(self.indicator)
-        inner_layout.addSpacing(10)
-        inner_layout.addWidget(self.label)
-        
-        # --- CONTEXTO (PAINEL ROXO) ---
+
+        top_row.addWidget(self.status_dot)
+        top_row.addWidget(self.label)
+        top_row.addStretch()
+
         self.context_frame = QFrame()
         self.context_frame.setStyleSheet("""
             QFrame {
-                background-color: rgba(175, 82, 222, 50); 
-                border: 1px solid rgba(175, 82, 222, 120); 
+                background-color: rgba(255, 255, 255, 0.04);
+                border: 0.5px solid rgba(255, 255, 255, 0.06);
                 border-radius: 8px;
             }
         """)
-        ctx_layout = QVBoxLayout(self.context_frame)
-        self.file_label = QLabel("FILE: --")
-        self.linear_label = QLabel("LIN: --")
-        self.github_label = QLabel("GIT: --")
+        ctx_inner = QVBoxLayout(self.context_frame)
+        ctx_inner.setContentsMargins(12, 8, 12, 8)
+        ctx_inner.setSpacing(4)
+
+        self.file_label = self._make_context_label()
+        self.linear_label = self._make_context_label()
+        self.github_label = self._make_context_label()
+
         for lbl in [self.file_label, self.linear_label, self.github_label]:
-            lbl.setStyleSheet("color: #af52de; font-size: 10px; font-weight: bold; border: none; background: transparent;")
-            ctx_layout.addWidget(lbl)
-        
-        # Adiciona ao layout principal
-        self.main_layout.addWidget(self.container)
-        self.main_layout.addWidget(self.context_frame)
-        
+            ctx_inner.addWidget(lbl)
+
         self.context_frame.hide()
+
+        inner.addLayout(top_row)
+        inner.addWidget(self.context_frame)
+
+        self.main_layout.addWidget(self.container)
         self.hide()
 
-    def update_hud(self, text, state="IDLE", duration=3000):
-        self.hide_timer.stop() # Cancela qualquer fechamento pendente
-        
-        self.label.setText(text.upper())
-        colors = {
-            "IDLE": "#00d4ff", "LISTENING": "#ff3b30", "THINKING": "#ffcc00",
-            "PROACTIVE": "#4cd964", "SUCCESS": "#34c759", "CODING": "#af52de"
-        }
-        color = colors.get(state, "#00d4ff")
-        
-        # Atualiza o brilho neon do indicador e a borda do container
-        self.indicator.setStyleSheet(f"background-color: {color}; border-radius: 5px; border: 1px solid white;")
-        
-        self.container.setStyleSheet(f"""
-            QFrame#MainContainer {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(25, 25, 45, 240), stop:1 rgba(10, 10, 20, 255));
-                border: 2px solid {color}88;
-                border-radius: 12px;
-                min-width: 250px;
+    def _make_context_label(self):
+        lbl = QLabel("--")
+        lbl.setStyleSheet("""
+            QLabel {
+                color: rgba(255, 255, 255, 0.5);
+                font-size: 11px;
+                font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+                font-weight: 400;
+                border: none;
+                background: transparent;
+            }
+        """)
+        return lbl
+
+    def _set_dot_color(self, hex_color: str):
+        self.status_dot.setStyleSheet(f"""
+            QFrame {{
+                background-color: {hex_color};
+                border-radius: 5px;
+                border: none;
             }}
         """)
-        
+
+    def _apply_vibrancy(self, widget):
+        if not HAS_NATIVE_BLUR:
+            return
+        try:
+            win_id = widget.winId()
+            if win_id is None:
+                QTimer.singleShot(100, lambda: self._apply_vibrancy(widget))
+                return
+            ns_view = objc.objc_object(c_void_p=win_id.__int__())
+            effect = NSVisualEffectView.new()
+            effect.setMaterial_(NSVisualEffectMaterial.HUDWindow)
+            effect.setState_(NSVisualEffectState.FollowsWindowActiveState)
+            effect.setBlendingMode_(NSVisualEffectBlendingMode.BehindWindow)
+            effect.setFrame_(ns_view.bounds())
+            effect.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
+            if hasattr(ns_view, 'contentView'):
+                ns_view.contentView().addSubview_positioned_relativeTo_(effect, 0, None)
+            else:
+                ns_view.addSubview_(effect)
+            self._vibrancy_view = effect
+        except Exception:
+            pass
+
+    def update_hud(self, text, state="IDLE", duration=3000):
+        self.hide_timer.stop()
+
+        self.label.setText(text)
+
+        state_colors = {
+            "IDLE": "#34c759",
+            "LISTENING": "#ff453a",
+            "THINKING": "#ffd60a",
+            "PROACTIVE": "#64d2ff",
+            "SUCCESS": "#34c759",
+            "CODING": "#bf5af2",
+            "SPEAKING": "#ff9f0a",
+        }
+        color = state_colors.get(state, "#34c759")
+        self._set_dot_color(color)
+
         self.adjustSize()
-        self.recenter()
+        self._reposition()
         self.show()
         self.raise_()
-        
+        self._visible = True
+
+        # Aplica vibrancy nativo na primeira exibição
+        if not hasattr(self, '_vibrancy_applied'):
+            self._vibrancy_applied = True
+            QTimer.singleShot(50, lambda: self._apply_vibrancy(self))
+
         if duration > 0:
             self.hide_timer.start(duration)
 
     def update_context_wall(self, data):
-        """Atualiza o painel de contexto lateral."""
         if not data:
             self.context_frame.hide()
             return
-            
-        file_name = (data.get('file') or '--')[:15]
-        linear_info = (data.get('linear') or '--')[:20]
-        github_info = (data.get('github') or '--')[:20]
-        
-        self.file_label.setText(f"FILE: {file_name}")
-        self.linear_label.setText(f"LIN: {linear_info}")
-        self.github_label.setText(f"GIT: {github_info}")
-        self.context_frame.show()
-        self.recenter()
-        self.show()
 
-    def recenter(self):
-        """Posiciona o HUD no canto superior esquerdo para um visual minimalista."""
-        self.move(30, 50)
+        self.file_label.setText(f"FILE  {data.get('file', '--')[:32]}")
+        self.linear_label.setText(f"TASK  {data.get('linear', '--')[:32]}")
+        self.github_label.setText(f"REPO  {data.get('github', '--')[:32]}")
+        
+        # Repassa para o VoiceOverlay se ele for o foco visual
+        self.voice_overlay.update_context(self.file_label, self.linear_label, self.github_label)
+        
+        # No HUD normal fica visível apenas se não estivermos em modo voz
+        if not self.voice_overlay.isVisible():
+            self.context_frame.show()
+            self._reposition()
+            self.show()
+
+    def _reposition(self):
+        screen = self.screen().geometry()
+        # Não precisa mais de adjustSize na largura, apenas na altura
+        self.setFixedHeight(self.sizeHint().height())
+        w = 240
+        x = screen.width() - w - 20
+        y = 20
+        self.move(x, y)
+
+    def _fade_out(self):
+        self._visible = False
+        self.hide()
 
     def show_message(self, text, duration=3000):
         self.update_hud(text, "IDLE", duration)

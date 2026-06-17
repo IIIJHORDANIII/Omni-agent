@@ -33,6 +33,8 @@ class KokoroService:
         self._is_speaking = False
         self._abort_playback = False
         self.status_callback = None
+        self.amplitude_callback = None
+        self.spectrum_callback = None
         self.playback_queue = Queue()
         self.running = True
         
@@ -95,24 +97,27 @@ class KokoroService:
                 
                 self._abort_playback = False
                 try:
+                    # Toca o áudio de forma não-bloqueante para podermos processar a amplitude
                     sd.play(samples, sample_rate)
                     
-                    # Aguarda o término ou aborto
-                    while True:
+                    # Simulação de amplitude durante o playback
+                    # Como sd.play é assíncrono, vamos calcular a energia por blocos
+                    chunk_size = int(sample_rate * 0.05) # 50ms
+                    for i in range(0, len(samples), chunk_size):
                         if self._abort_playback:
                             sd.stop()
                             break
                         
-                        # Verifica se ainda está tocando
-                        # sounddevice.get_stream() retorna o stream ativo
-                        try:
-                            st = sd.get_stream()
-                            if st is None or not st.active:
-                                break
-                        except:
-                            break
+                        if self.amplitude_callback:
+                            chunk = samples[i:i+chunk_size]
+                            if len(chunk) > 0:
+                                energy = np.sqrt(np.mean(chunk**2))
+                                self.amplitude_callback(float(energy))
                         
-                        time.sleep(0.05)
+                        time.sleep(0.045) # Um pouco menos que 50ms para manter o ritmo
+
+                    # Aguarda o término real se necessário
+                    sd.wait()
                 except Exception as play_error:
                     print(f"⚠️ Erro ao iniciar playback: {play_error}")
                 
@@ -133,9 +138,10 @@ class KokoroService:
         """Adiciona texto à fila para processamento e fala."""
         if not text or not self.kokoro: return
 
-        # Limpeza de texto para fala natural
-        clean_text = re.sub(r'[*#_`~]', '', text)
-        clean_text = re.sub(r'\[.*?\]', '', clean_text)
+        from utils.tts_preprocessor import preprocess_for_tts
+
+        # Limpeza de texto para fala natural + pronúncia bilingue
+        clean_text = preprocess_for_tts(text)
         clean_text = clean_text.replace("UI", "interface").strip()
         
         if not clean_text or len(clean_text) < 2: return
@@ -145,6 +151,22 @@ class KokoroService:
                 # Geração de Samples (Nativo Kokoro ONNX)
                 samples, sample_rate = self.kokoro.create(
                     clean_text, 
+                    voice=voice, 
+                    speed=speed, 
+                    lang=lang
+                )
+                self.playback_queue.put((samples, sample_rate))
+            except Exception as e:
+                print(f"⚠️ Erro ao gerar áudio Kokoro: {e}")
+
+        # A geração do áudio ainda pode ser em thread para não travar o chamador (LLM stream)
+        threading.Thread(target=_generate_and_enqueue, daemon=True).start()
+
+    def get_available_voices(self):
+        if self.kokoro:
+            return self.kokoro.get_voices()
+        return []
+ 
                     voice=voice, 
                     speed=speed, 
                     lang=lang

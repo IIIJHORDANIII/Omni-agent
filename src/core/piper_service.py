@@ -74,7 +74,7 @@ class PiperService:
                 if self.status_callback: self.status_callback("SPEAKING", True)
 
                 # Salva em arquivo temporário para reprodução
-                tmp_dir = os.path.expanduser("~/Library/Caches/OmniscientAgent")
+                tmp_dir = os.path.expanduser("~/Library/Caches/AndersAgent")
                 os.makedirs(tmp_dir, exist_ok=True)
                 tmp_path = os.path.join(tmp_dir, f"piper_{int(time.time())}.wav")
 

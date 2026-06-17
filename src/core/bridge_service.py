@@ -3,12 +3,9 @@ import json
 import threading
 import queue
 import time
-import uuid
+import os
 
 class BridgeService:
-    """
-    Gerencia a comunicação assíncrona com o SwiftAgent.
-    """
     _instance = None
     _lock = threading.Lock()
 
@@ -24,23 +21,37 @@ class BridgeService:
         self.socket_path = "/tmp/omniscient_agent.sock"
         self.request_queue = queue.Queue()
         self.results = {}
-        self._result_events = {}
         self.running = True
+        self._swift_available = None  # None = não verificado, True/False
+        self._consecutive_failures = 0
         
         threading.Thread(target=self._bridge_worker, daemon=True).start()
         self._initialized = True
 
+    def _check_swift_available(self):
+        """Verifica se o SwiftAgent está rodando (uma vez só)."""
+        if self._swift_available is not None:
+            return self._swift_available
+        self._swift_available = os.path.exists(self.socket_path)
+        if not self._swift_available:
+            print("Bridge: SwiftAgent não encontrado. Serviços nativos desabilitados.")
+        return self._swift_available
+
     def send_async(self, command, callback=None):
-        req_id = uuid.uuid4().hex
-        self._result_events[req_id] = threading.Event()
+        req_id = str(time.time())
         self.request_queue.put((req_id, command, callback))
         return req_id
 
     def send_sync(self, command, timeout=5):
+        if not self._check_swift_available():
+            return {"status": "error", "message": "SwiftAgent não disponível"}
+        
         req_id = self.send_async(command)
-        event = self._result_events.get(req_id)
-        if event and event.wait(timeout=timeout):
-            return self.results.pop(req_id, {"status": "error", "message": "Resultado não encontrado"})
+        start = time.time()
+        while time.time() - start < timeout:
+            if req_id in self.results:
+                return self.results.pop(req_id)
+            time.sleep(0.05)
         return {"status": "error", "message": "Timeout na ponte Swift"}
 
     def _bridge_worker(self):
@@ -48,24 +59,30 @@ class BridgeService:
             try:
                 req_id, command, callback = self.request_queue.get(timeout=1.0)
                 
+                if not self._check_swift_available():
+                    self.results[req_id] = {"status": "error", "message": "SwiftAgent não disponível"}
+                    if callback:
+                        try:
+                            callback(self.results[req_id])
+                        except Exception:
+                            pass
+                    self.request_queue.task_done()
+                    continue
+                
                 result = self._raw_send(command)
                 self.results[req_id] = result
-                
-                event = self._result_events.pop(req_id, None)
-                if event:
-                    event.set()
                 
                 if callback:
                     try:
                         callback(result)
                     except Exception as cb_err:
-                        pass
+                        print(f"Bridge: Erro no callback: {cb_err}")
                 
                 self.request_queue.task_done()
             except queue.Empty:
                 continue
             except Exception as e:
-                pass
+                print(f"Bridge Worker Erro: {e}")
 
     def _raw_send(self, command_json, retry_count=3):
         for attempt in range(retry_count):
@@ -79,42 +96,16 @@ class BridgeService:
                 client.close()
 
                 if response:
+                    self._consecutive_failures = 0
                     return json.loads(response.decode('utf-8'))
                 return {"status": "success"}
             except Exception as e:
+                self._consecutive_failures += 1
                 if attempt == retry_count - 1:
-                    self._restart_native_bridge()
+                    if self._consecutive_failures >= 6:
+                        self._swift_available = False
+                        print("Bridge: SwiftAgent indisponível. Parando tentativas.")
                     return {"status": "error", "message": str(e)}
                 time.sleep(1)
 
-    def _restart_native_bridge(self):
-        """Tenta reiniciar o processo nativo Swift."""
-        try:
-            import subprocess
-            subprocess.run(["killall", "Omniscient"], capture_output=True)
-        except Exception:
-            pass
-
-    # Overlay methods
-    def overlay_show(self):
-        """Mostra o overlay Siri-like."""
-        return self.send_sync({"action": "overlay_show"})
-
-    def overlay_hide(self):
-        """Esconde o overlay Siri-like."""
-        return self.send_sync({"action": "overlay_hide"})
-
-    def overlay_transcript(self, text: str):
-        """Atualiza a transcrição no overlay."""
-        return self.send_sync({"action": "overlay_transcript", "text": text})
-
-    def overlay_response(self, text: str):
-        """Atualiza a resposta no overlay."""
-        return self.send_sync({"action": "overlay_response", "text": text})
-
-    def overlay_error(self, text: str):
-        """Mostra erro no overlay."""
-        return self.send_sync({"action": "overlay_error", "text": text})
-
-# Instância global
 bridge = BridgeService()

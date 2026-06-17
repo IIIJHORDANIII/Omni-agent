@@ -7,7 +7,7 @@ import uuid
 class PersistentShell:
     """
     Mantém uma sessão de shell viva para preservar o estado (cd, env vars).
-    Fallback robusto: se o shell morrer ou timeout, usa subprocess.run direto.
+    Usa um sentinel único para detectar o fim da execução de cada comando.
     """
     _instance = None
     _lock = threading.Lock()
@@ -22,90 +22,63 @@ class PersistentShell:
     def __init__(self):
         if self._initialized: return
         
-        self.process = None
-        self.sentinel = f"__OMNI_DONE_{uuid.uuid4().hex}__"
-        self._start_shell()
-        self._initialized = True
-
-    def _start_shell(self):
-        """Inicia ou reinicia a sessão zsh."""
-        try:
-            self.process = subprocess.Popen(
-                ["zsh", "-i"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                env=os.environ.copy()
-            )
-            print("PersistentShell: Sessão ZSH iniciada.")
-        except Exception as e:
-            print(f"PersistentShell: Falha ao iniciar ZSH: {e}")
-            self.process = None
-
-    def execute(self, command, timeout=30):
-        """Executa um comando e retorna o output. Fallback para subprocess.run direto."""
-        # Tenta usar shell persistente primeiro
-        if self.process and self.process.poll() is None:
-            try:
-                return self._execute_persistent(command, timeout)
-            except Exception as e:
-                print(f"PersistentShell: Erro no shell persistente, usando fallback: {e}")
+        # Inicia o processo zsh (nativo macOS)
+        self.process = subprocess.Popen(
+            ["zsh", "-i"], # Modo interativo para carregar aliases se houver
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1, # Line buffered
+            env=os.environ.copy()
+        )
         
-        # Fallback: subprocess.run direto (mais confiável)
-        return self._execute_fallback(command, timeout)
+        self.sentinel = f"__ANDERS_DONE_{uuid.uuid4().hex}__"
+        self._initialized = True
+        print("PersistentShell: Sessão ZSH iniciada.")
 
-    def _execute_persistent(self, command, timeout):
-        """Executa via shell persistente com sentinel."""
+    def execute(self, command, timeout=15):
+        """Executa um comando e retorna o output até o sentinel."""
+        if not self.process or self.process.poll() is not None:
+            self._initialized = False
+            self.__init__() # Reinicia se morreu
+
+        # Limpa o comando e adiciona o eco do sentinel
         full_command = f"{command}; echo '{self.sentinel}'; echo '{self.sentinel}' >&2\n"
         
-        self.process.stdin.write(full_command)
-        self.process.stdin.flush()
-        
-        stdout_lines = []
-        stderr_lines = []
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            line = self.process.stdout.readline()
-            if self.sentinel in line:
-                break
-            stdout_lines.append(line)
-        
-        return {
-            "stdout": "".join(stdout_lines).strip(),
-            "stderr": "",
-            "returncode": 0
-        }
-
-    def _execute_fallback(self, command, timeout):
-        """Executa via subprocess.run direto (fallback seguro)."""
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=os.environ.copy()
-            )
+            self.process.stdin.write(full_command)
+            self.process.stdin.flush()
+            
+            stdout_lines = []
+            stderr_lines = []
+            
+            start_time = time.time()
+            
+            # Leitura não-bloqueante (simplificada para este ambiente)
+            while time.time() - start_time < timeout:
+                # Nota: Esta implementação de leitura é síncrona para simplificar o loop.
+                # Em produção real, usaríamos threads ou select para ler stdout/stderr em paralelo.
+                line = self.process.stdout.readline()
+                if self.sentinel in line:
+                    break
+                stdout_lines.append(line)
+            
+            # Tenta pegar erros se houver
+            # (Em zsh interativo, o stderr pode ser barulhento, então filtramos)
+            
             return {
-                "stdout": result.stdout.strip(),
-                "stderr": result.stderr.strip(),
-                "returncode": result.returncode
+                "stdout": "".join(stdout_lines).strip(),
+                "stderr": "", # Simplificado: zsh interativo mistura muito stderr
+                "returncode": 0 # Presumimos 0 se o sentinel chegou
             }
-        except subprocess.TimeoutExpired:
-            return {"stdout": "", "stderr": f"Timeout: comando excedeu {timeout}s.", "returncode": -1}
+            
         except Exception as e:
-            return {"stdout": "", "stderr": str(e), "returncode": -1}
+            return {"status": "error", "message": str(e)}
 
     def __del__(self):
         if hasattr(self, 'process') and self.process:
-            try:
-                self.process.terminate()
-            except:
-                pass
+            self.process.terminate()
 
 # Instância global
 shell = PersistentShell()

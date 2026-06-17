@@ -129,7 +129,7 @@ class ExecutionService:
     def resolve_path(name):
         """Busca agressiva por um caminho no Mac que combine com o nome (case-insensitive)."""
         try:
-            # 1. Busca rápida em Documents/pessoal (onde o Jhordan guarda a maioria dos projetos)
+            # 1. Busca rápida em Documents/pessoal (onde o usuário guarda a maioria dos projetos)
             search_cmd = f"find ~/Documents/pessoal -maxdepth 2 -iname '*{name}*' -type d | head -n 1"
             res = ExecutionService.run_terminal_command(search_cmd)
             path = res.get("stdout", "").strip()
