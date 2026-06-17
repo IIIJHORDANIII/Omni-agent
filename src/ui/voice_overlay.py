@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel
-from PyQt6.QtCore import Qt, QTimer, QRectF
-from PyQt6.QtGui import QColor, QPainter, QBrush, QPainterPath, QLinearGradient
+from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
+from PyQt6.QtGui import QColor, QPainter, QBrush, QPainterPath, QPen, QLinearGradient
 import math
 
 try:
@@ -17,7 +17,7 @@ except ImportError:
 
 
 class SiriWaveWidget(QWidget):
-    """Equalizador Minimalista de Alta Sensibilidade."""
+    """Equalizador de Linha Contínua (Spline) - Alta Elegância."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -25,21 +25,21 @@ class SiriWaveWidget(QWidget):
         self._target = 0.0
         self._phase = 0.0
         self._mode = "idle"
-        self._color = QColor(255, 255, 255) # Default White
-        self.setFixedSize(160, 32)
+        self._color = QColor(255, 255, 255)
+        self.setFixedSize(200, 40)
 
     def set_amplitude(self, value: float):
-        # Sensibilidade aumentada
-        self._target = max(0.01, min(1.0, value * 6.0))
+        # Sensibilidade extrema para a linha contínua
+        self._target = max(0.01, min(1.0, value * 8.0))
 
     def set_mode(self, state: str):
         self._mode = state.lower()
         if self._mode == "listening":
-            self._color = QColor(255, 255, 255, 255) # Branco Puro
+            self._color = QColor(255, 255, 255, 255)
         elif self._mode == "speaking":
-            self._color = QColor(255, 59, 48, 255)   # Vermelho Vibrante
+            self._color = QColor(255, 59, 48, 255)
         elif self._mode in ["thinking", "processing"]:
-            self._color = QColor(255, 214, 10, 255)  # Amarelo Apple
+            self._color = QColor(255, 214, 10, 255)
         else:
             self._color = QColor(255, 255, 255, 100)
 
@@ -47,55 +47,63 @@ class SiriWaveWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        self._amp += (self._target - self._amp) * 0.3
-        self._phase += 0.15 + (self._amp * 0.25)
+        self._amp += (self._target - self._amp) * 0.2
+        self._phase += 0.2 + (self._amp * 0.3)
 
         w, h = self.width(), self.height()
         cy = h / 2
 
         if self._mode in ["thinking", "processing"]:
-            # Linha amarela esticada e estática (com glow)
-            bar_w = w - 20
-            bar_h = 3
-            x = (w - bar_w) / 2
-            y = cy - bar_h / 2
+            # LINHA AMARELA ESTICADA (Glow estático pulsante)
+            path = QPainterPath()
+            path.moveTo(10, cy)
+            path.lineTo(w - 10, cy)
             
-            # Glow Effect
-            glow = QColor(self._color)
-            glow.setAlpha(100)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(glow))
-            p.drawRoundedRect(QRectF(x-2, y-2, bar_w+4, bar_h+4), 4, 4)
+            # Glow
+            pen_glow = QPen(self._color, 4)
+            glow_c = QColor(self._color)
+            glow_c.setAlpha(80)
+            pen_glow.setColor(glow_c)
+            p.setPen(pen_glow)
+            p.drawPath(path)
             
-            p.setBrush(QBrush(self._color))
-            p.drawRoundedRect(QRectF(x, y, bar_w, bar_h), 1.5, 1.5)
+            # Linha principal
+            p.setPen(QPen(self._color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawPath(path)
         else:
-            # Wave reativa
-            n = 15
-            bar_w = 3
-            gap = 4
-            total = n * bar_w + (n - 1) * gap
-            cx = (w - total) / 2
-
-            for i in range(n):
-                x = cx + i * (bar_w + gap)
-                idle = 2 + 3 * abs(math.sin(self._phase + i * 0.3))
-                reactivity = 1.0 - (abs(i - (n/2)) * 0.12)
-                bar_h = idle + (self._amp * (h - 4) * reactivity)
-                y = cy - bar_h / 2
-
-                color = QColor(self._color)
-                alpha = int(180 + 75 * self._amp)
-                color.setAlpha(min(255, alpha))
+            # WAVE SENOIDAL DINÂMICA
+            path = QPainterPath()
+            path.moveTo(0, cy)
+            
+            points = 40
+            dx = w / points
+            
+            for i in range(points + 1):
+                x = i * dx
+                # Envelope gaussiano para suavizar as pontas
+                envelope = math.exp(-0.5 * ((i - points/2) / (points/4))**2)
                 
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QBrush(color))
-                p.drawRoundedRect(QRectF(x, y, bar_w, bar_h), bar_w/2, bar_w/2)
+                # Frequência baseada no modo
+                freq = 0.5 if self._mode == "speaking" else 0.8
+                
+                y = cy + (self._amp * 15 * envelope * math.sin(self._phase + i * freq))
+                path.lineTo(x, y)
+
+            # Desenha com gradiente sutil
+            pen = QPen(self._color, 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.drawPath(path)
+            
+            # Segunda camada mais fina para brilho
+            pen.setWidthF(1.0)
+            p.setPen(pen)
+            p.drawPath(path)
+            
         p.end()
 
 
 class VoiceOverlay(QWidget):
-    """Container vertical persistente e Click-Through."""
+    """Container vertical unificado com largura fixa de 240px."""
 
     def __init__(self):
         super().__init__()
@@ -107,7 +115,6 @@ class VoiceOverlay(QWidget):
         self._setup_ui()
 
     def _setup_window(self):
-        # ToolTip + StaysOnTop garante persistência no macOS sem roubar foco
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
@@ -118,54 +125,54 @@ class VoiceOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        # 100% Click-Through
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-        self.setFixedWidth(220)
-        self.setFixedHeight(140)
+        # LARGURA UNIFICADA: 240px
+        self.setFixedWidth(240)
+        self.setFixedHeight(160)
         self._position()
 
     def _position(self):
         screen = self.screen().geometry()
-        # Fixa 20px da borda direita e topo
+        # 20px de margem (Sincronizado com HUD)
         self.move(screen.width() - self.width() - 20, 20)
 
     def _setup_ui(self):
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(8)
+        self.main_layout.setSpacing(0)
         self.main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # Container Principal com Blur
         self.bg_frame = QFrame()
         self.bg_frame.setObjectName("OverlayBG")
+        # Estilo Apple Glass mais slim
         self.bg_frame.setStyleSheet("""
             #OverlayBG {
-                background-color: rgba(0, 0, 0, 0.85);
+                background-color: rgba(15, 15, 20, 0.82);
                 border: 0.5px solid rgba(255, 255, 255, 0.1);
                 border-radius: 14px;
             }
         """)
         
         bg_layout = QVBoxLayout(self.bg_frame)
-        bg_layout.setContentsMargins(12, 12, 12, 12)
-        bg_layout.setSpacing(10)
+        bg_layout.setContentsMargins(12, 10, 12, 10)
+        bg_layout.setSpacing(6)
 
         # 1. Wave
         self.wave = SiriWaveWidget()
         bg_layout.addWidget(self.wave, alignment=Qt.AlignmentFlag.AlignCenter)
         
-        # 2. Status Label (Opcional, discreto)
+        # 2. Status
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: rgba(255, 255, 255, 0.4); font-size: 9px; font-weight: 600; text-transform: uppercase;")
+        self.status_label.setStyleSheet("color: rgba(255, 255, 255, 0.5); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         bg_layout.addWidget(self.status_label)
 
-        # 3. Tags Container
+        # 3. Tags (Contexto)
         self.tags_container = QFrame()
         self.tags_layout = QVBoxLayout(self.tags_container)
-        self.tags_layout.setContentsMargins(0, 0, 0, 0)
-        self.tags_layout.setSpacing(4)
+        self.tags_layout.setContentsMargins(4, 4, 4, 4)
+        self.tags_layout.setSpacing(3)
         bg_layout.addWidget(self.tags_container)
         
         self.main_layout.addWidget(self.bg_frame)
@@ -173,7 +180,7 @@ class VoiceOverlay(QWidget):
 
     def set_state(self, state: str):
         self.wave.set_mode(state)
-        self.status_label.setText(state.replace("_", " "))
+        self.status_label.setText(state.upper())
         
         if state in ["listening", "speaking", "thinking", "processing"]:
             self.bg_frame.show()
@@ -188,7 +195,9 @@ class VoiceOverlay(QWidget):
             if item.widget(): item.widget().setParent(None)
             
         for lbl in [file_lbl, task_lbl, repo_lbl]:
-            lbl.setStyleSheet("color: rgba(255, 255, 255, 0.7); font-size: 10px; font-weight: 500; background: transparent;")
+            # Força fonte mono e elide para não quebrar largura
+            lbl.setStyleSheet("color: rgba(255, 255, 255, 0.6); font-size: 10px; font-family: 'Menlo'; background: transparent;")
+            lbl.setFixedWidth(210) # Garante que cabe nos 240px
             self.tags_layout.addWidget(lbl)
         
         self.bg_frame.show()

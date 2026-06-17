@@ -69,6 +69,9 @@ class HUDOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) # Click-through total
 
+        # LARGURA UNIFICADA: 240px
+        self.setFixedWidth(240)
+        
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
@@ -78,7 +81,7 @@ class HUDOverlay(QWidget):
         self.container.setStyleSheet(_apple_stylesheet())
 
         inner = QVBoxLayout(self.container)
-        inner.setContentsMargins(16, 12, 16, 12)
+        inner.setContentsMargins(14, 10, 14, 10)
         inner.setSpacing(8)
 
         top_row = QHBoxLayout()
@@ -226,8 +229,9 @@ class HUDOverlay(QWidget):
 
     def _reposition(self):
         screen = self.screen().geometry()
-        self.adjustSize()
-        w = self.width()
+        # Não precisa mais de adjustSize na largura, apenas na altura
+        self.setFixedHeight(self.sizeHint().height())
+        w = 240
         x = screen.width() - w - 20
         y = 20
         self.move(x, y)
