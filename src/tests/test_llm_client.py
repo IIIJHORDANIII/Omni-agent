@@ -17,14 +17,14 @@ def llm_client():
                 return client
 
 def test_chat_simple_response(llm_client):
-    llm_client.manager.generate_streaming.return_value = ["Olá, ", "Jhordan!"]
+    llm_client.manager.generate_streaming.return_value = ["Olá, ", "Senhor!"]
     
     stream_results = []
     def callback(s): stream_results.append(s)
     
     response = llm_client.chat([{"role": "user", "content": "Oi"}], stream_callback=callback)
     
-    assert "Olá, Jhordan!" in response
+    assert "Olá, Senhor!" in response
     assert len(stream_results) == 2
     llm_client.manager.generate_streaming.assert_called_once()
 

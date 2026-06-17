@@ -1,365 +1,573 @@
 import sys
 import os
-import json
-import time
 import threading
 import numpy as np
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, 
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit,
                              QPushButton, QHBoxLayout, QFrame, QStackedWidget,
-                             QProgressBar, QApplication, QDialog, QComboBox, QCheckBox)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QSize, QObject, QMetaObject, Q_ARG
-from PyQt6.QtGui import QFont, QColor, QImage, QPixmap
+                             QProgressBar, QApplication, QDialog, QComboBox,
+                             QCheckBox, QScrollArea)
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont
 
-# --- WORKER DE CÂMERA ---
-class CameraWorker(QObject):
-    """Worker para capturar frames da webcam e emitir sinais Qt."""
-    new_frame = pyqtSignal(QImage)
-    error = pyqtSignal(str)
-    
-    def __init__(self):
-        super().__init__()
-        self.running = False
-        self.cap = None
 
-    def start_capture(self):
-        if self.running: return
-        print("CameraWorker: Iniciando captura...")
-        self.running = True
-        threading.Thread(target=self._run, daemon=True).start()
+def _apple_btn_style(accent=False):
+    if accent:
+        return """
+            QPushButton {
+                background-color: #007aff;
+                color: white;
+                font-weight: 600;
+                border-radius: 8px;
+                padding: 10px 24px;
+                font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+                font-size: 13px;
+                border: none;
+            }
+            QPushButton:hover { background-color: #0066d6; }
+            QPushButton:pressed { background-color: #004ea2; }
+            QPushButton:disabled { background-color: rgba(0, 122, 255, 0.4); }
+        """
+    return """
+        QPushButton {
+            background-color: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.85);
+            font-weight: 500;
+            border-radius: 8px;
+            padding: 10px 24px;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+            font-size: 13px;
+            border: 0.5px solid rgba(255, 255, 255, 0.1);
+        }
+        QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); }
+    """
 
-    def _run(self):
-        try:
-            import cv2
-            self.cap = cv2.VideoCapture(0)
-            if not self.cap or not self.cap.isOpened():
-                print("CameraWorker: Câmera não encontrada.")
-                self.error.emit("Câmera não detectada.")
-                return
-                
-            while self.running:
-                ret, frame = self.cap.read()
-                if ret:
-                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    h, w, ch = rgb_frame.shape
-                    qt_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format.Format_RGB888)
-                    self.new_frame.emit(qt_img.copy())
-                time.sleep(0.03)
-                
-            if self.cap:
-                self.cap.release()
-                self.cap = None
-        except Exception as e:
-            print(f"CameraWorker Erro: {e}")
-            self.error.emit(str(e))
 
-    def stop(self):
-        self.running = False
-
-    def get_snapshot(self):
-        if self.cap:
-            ret, frame = self.cap.read()
-            if ret: return frame
-        return None
-
-# --- CLASSES BASE ---
 class StyledPage(QWidget):
     def __init__(self, title, subtitle, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(40, 20, 40, 20)
-        self.layout.setSpacing(15)
-        
+        self.layout.setContentsMargins(32, 24, 32, 24)
+        self.layout.setSpacing(12)
+
         lbl_title = QLabel(title)
-        lbl_title.setStyleSheet("color: #00d4ff; font-size: 22px; font-weight: 900; letter-spacing: 2px;")
+        lbl_title.setStyleSheet("""
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 20px;
+            font-weight: 700;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+        """)
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(lbl_title)
-        
+
         lbl_sub = QLabel(subtitle)
-        lbl_sub.setStyleSheet("color: #aaaaaa; font-size: 13px; font-weight: 500;")
+        lbl_sub.setStyleSheet("""
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 13px;
+            font-weight: 400;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+        """)
         lbl_sub.setWordWrap(True)
         lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(lbl_sub)
 
     def add_label(self, text):
-        lbl = QLabel(text.upper())
-        lbl.setStyleSheet("color: #00d4ff; font-size: 11px; font-weight: 800; margin-top: 10px;")
+        lbl = QLabel(text)
+        lbl.setStyleSheet("""
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 11px;
+            font-weight: 600;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+            margin-top: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        """)
         self.layout.addWidget(lbl)
         return lbl
 
-# --- PÁGINAS DO WIZARD ---
+
 class WelcomePage(StyledPage):
     def __init__(self, parent=None):
-        super().__init__("SISTEMAS ONLINE", "ONBOARDING OMNISCIENT AGENT PRO", parent)
-        self.add_label("REGISTRO DO MESTRE")
+        super().__init__("Anders Setup", "Configure seu assistente pessoal.", parent)
+        self.add_label("Seu Nome")
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Como devo chamá-lo? (Ex: Jhordan)")
-        self.layout.addWidget(self.name_input)
-        
-        self.add_label("PERSONALIDADE")
-        self.personality = QComboBox()
-        # CORRIGIDO: Nomes conforme solicitado
-        self.personality.addItems(["OMNI (Formal/Leal)", "H.A.L (Frio/Eficiente)", "Samantha (Amigável/Proativo)"])
-        # CORRIGIDO: Design de seleção (Alto Contraste)
-        self.personality.setStyleSheet("""
-            QComboBox { 
-                background: #1a1a2e; 
-                color: #ffffff; 
-                border: 2px solid #00d4ff; 
-                border-radius: 6px;
-                padding: 10px;
-                font-weight: bold;
+        self.name_input.setPlaceholderText("Como devo chamá-lo?")
+        self.name_input.setStyleSheet("""
+            QLineEdit {
+                background: rgba(255, 255, 255, 0.06);
+                border: 0.5px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+                padding: 10px 12px;
+                color: white;
+                font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+                font-size: 13px;
             }
-            QComboBox QListView {
-                background-color: #05050a;
-                color: #00d4ff;
-                border: 1px solid #00d4ff;
-                selection-background-color: #00d4ff;
-                selection-color: #000000;
+            QLineEdit:focus {
+                border-color: #007aff;
+            }
+        """)
+        self.layout.addWidget(self.name_input)
+
+        self.add_label("Personalidade")
+        self.personality = QComboBox()
+        self.personality.addItems(["Anders (Formal / Leal)", "H.A.L (Frio / Eficiente)", "Samantha (Amigável / Proativo)"])
+        self.personality.setStyleSheet("""
+            QComboBox {
+                background: rgba(255, 255, 255, 0.06);
+                color: white;
+                border: 0.5px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+                padding: 10px 12px;
+                font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+                font-size: 13px;
+            }
+            QComboBox:focus { border-color: #007aff; }
+            QComboBox QAbstractItemView {
+                background-color: #1c1c1e;
+                color: white;
+                border: 0.5px solid rgba(255, 255, 255, 0.1);
+                selection-background-color: #007aff;
+                selection-color: white;
             }
         """)
         self.layout.addWidget(self.personality)
         self.layout.addStretch()
 
-class IdentityPage(StyledPage):
+
+class VoicePage(StyledPage):
+    SAMPLES = [
+        ("wake_1", "Diga: Anders"),
+        ("wake_2", "Diga: Anders (mais natural, como falaria de dia)"),
+        ("wake_phrase_1", "Diga: Anders, qual o clima?"),
+        ("wake_phrase_2", "Diga: Anders, me mostra os e-mails de hoje"),
+        ("full_word", "Diga: Anders Agent"),
+        ("command_1", "Diga: Anders, abre o VS Code"),
+        ("command_2", "Diga: Anders, cria um commit com a mensagem de deploy"),
+        ("conversation", "Diga: Anders, como está a bateria?"),
+        ("whisper", "Diga: Anders (sussurrando)"),
+        ("natural", "Diga qualquer frase que comece com Anders"),
+    ]
+
     def __init__(self, parent=None):
-        super().__init__("BIOMETRIA DE ELITE", "Mapeamento facial e assinatura de voz.")
-        
-        self.viewfinder = QLabel()
-        self.viewfinder.setFixedSize(320, 240)
-        self.viewfinder.setStyleSheet("background: #000; border: 2px solid #00d4ff; border-radius: 10px;")
-        self.viewfinder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.layout.addWidget(self.viewfinder, alignment=Qt.AlignmentFlag.AlignCenter)
-        
-        self.face_instructions = QLabel("AGUARDANDO MAPEAMENTO")
-        self.face_instructions.setStyleSheet("color: #00d4ff; font-weight: bold; font-size: 11px;")
-        self.layout.addWidget(self.face_instructions, alignment=Qt.AlignmentFlag.AlignCenter)
+        super().__init__("Assinatura de Voz", "Registre sua voz para que só você possa ativá-lo.\nQuanto mais amostras, mais precisa a verificação.", parent)
 
-        self.face_btn = QPushButton("INICIAR MAPEAMENTO FACIAL")
-        self.face_btn.setFixedWidth(250)
-        self.face_btn.clicked.connect(self.start_face_mapping)
-        self.layout.addWidget(self.face_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-        
-        self.layout.addSpacing(10)
-        
+        self._audio_samples = []
+        self._current_sample = 0
+        self._recording = False
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 6px;
+                border-radius: 3px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(255, 255, 255, 0.2);
+                border-radius: 3px;
+            }
+        """)
+
         v_frame = QFrame()
-        v_frame.setStyleSheet("background: rgba(175, 82, 222, 10); border: 1px dashed #af52de; border-radius: 8px;")
+        v_frame.setStyleSheet("""
+            QFrame {
+                background: rgba(255, 255, 255, 0.04);
+                border: 0.5px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
+            }
+        """)
         v_layout = QVBoxLayout(v_frame)
-        
-        lbl = QLabel("LEIA EM VOZ ALTA:")
-        lbl.setStyleSheet("color: #af52de; font-size: 10px; font-weight: bold;")
-        v_layout.addWidget(lbl)
+        v_layout.setContentsMargins(16, 16, 16, 16)
+        v_layout.setSpacing(8)
 
-        cal = QLabel('"Eu sou o mestre deste sistema. Omniscient, confirme minha identidade e ative os protocolos de segurança."')
-        cal.setStyleSheet("color: white; font-style: italic; font-size: 11px;")
-        cal.setWordWrap(True)
-        v_layout.addWidget(cal)
+        self.step_label = QLabel("PASSO 1 DE 10")
+        self.step_label.setStyleSheet("""
+            color: #007aff;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        """)
+        v_layout.addWidget(self.step_label)
 
-        self.voice_status = QLabel("Aguardando registro (10s)...")
-        self.voice_status.setStyleSheet("color: #888; font-size: 10px;")
+        self.prompt_label = QLabel(self.SAMPLES[0][1])
+        self.prompt_label.setStyleSheet("""
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 14px;
+            font-weight: 600;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+        """)
+        self.prompt_label.setWordWrap(True)
+        self.prompt_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v_layout.addWidget(self.prompt_label)
+
+        self.voice_status = QLabel("Pressione para gravar")
+        self.voice_status.setStyleSheet("""
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 11px;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+        """)
         v_layout.addWidget(self.voice_status)
-        
-        self.voice_btn = QPushButton("GRAVAR ASSINATURA")
-        self.voice_btn.setFixedWidth(200)
-        self.voice_btn.setStyleSheet("background: #af52de; color: white;")
-        self.voice_btn.clicked.connect(self.record_voice)
-        v_layout.addWidget(self.voice_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-        
-        self.layout.addWidget(v_frame)
 
-        self.cam_worker = CameraWorker()
-        self.cam_worker.new_frame.connect(self._update_frame)
-        self.cam_worker.error.connect(self._on_cam_error)
-        # Inicia captura IMEDIATAMENTE ao entrar na página
-        self.cam_worker.start_capture()
+        self.record_btn = QPushButton("Gravar")
+        self.record_btn.setStyleSheet(_apple_btn_style(accent=True))
+        self.record_btn.setFixedWidth(200)
+        self.record_btn.clicked.connect(self._toggle_record)
+        v_layout.addWidget(self.record_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
-    @pyqtSlot(QImage)
-    def _update_frame(self, img):
-        self.face_instructions.setText("OLHE DIRETAMENTE PARA A LENTE")
-        self.viewfinder.setPixmap(QPixmap.fromImage(img).scaled(self.viewfinder.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding))
+        dots_layout = QHBoxLayout()
+        dots_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dots = []
+        for i in range(10):
+            dot = QLabel()
+            dot.setFixedSize(8, 8)
+            dot.setStyleSheet("background: rgba(255,255,255,0.15); border-radius: 4px;")
+            dots_layout.addWidget(dot)
+            self.dots.append(dot)
+        v_layout.addLayout(dots_layout)
 
-    def _on_cam_error(self, err):
-        self.face_instructions.setText(f"ERRO CÂMERA: {err}")
-        self.face_instructions.setStyleSheet("color: #ff3b30; font-weight: bold;")
+        self.embedding_status = QLabel("")
+        self.embedding_status.setStyleSheet("""
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 10px;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+        """)
+        self.embedding_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v_layout.addWidget(self.embedding_status)
 
-    def start_face_mapping(self):
-        """Dispara sequência de fotos."""
-        print("Setup: Iniciando mapeamento facial...")
-        self.face_btn.setEnabled(False)
-        self._take_sample("FRONTAL", "user_face_front.jpg")
-        QTimer.singleShot(1500, lambda: self._take_sample("ESQUERDA", "user_face_left.jpg"))
-        QTimer.singleShot(3000, lambda: self._take_sample("DIREITA", "user_face_right.jpg"))
-        QTimer.singleShot(4000, self._finalize_face)
+        scroll.setWidget(v_frame)
+        self.layout.addWidget(scroll)
+        self.layout.addStretch()
 
-    def _take_sample(self, angle, filename):
-        self.face_instructions.setText(f"POSICIONAMENTO: {angle}")
-        # Efeito Flash
-        self.viewfinder.setStyleSheet("background: #fff; border: 4px solid #fff; border-radius: 10px;")
-        QTimer.singleShot(150, lambda: self.viewfinder.setStyleSheet("background: #000; border: 2px solid #00d4ff; border-radius: 10px;"))
-        
-        frame = self.cam_worker.get_snapshot()
-        if frame is not None:
-            import cv2
-            save_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory_db")
-            os.makedirs(save_dir, exist_ok=True)
-            cv2.imwrite(os.path.join(save_dir, filename), frame)
+    def _toggle_record(self):
+        if self._recording:
+            return
+        self._start_recording()
 
-    def _finalize_face(self):
-        self.face_instructions.setText("✅ MAPEAMENTO COMPLETO")
-        self.face_instructions.setStyleSheet("color: #34c759; font-weight: bold;")
-        self.viewfinder.setStyleSheet("background: #000; border: 4px solid #34c759; border-radius: 10px;")
-        self.cam_worker.stop()
+    def _start_recording(self):
+        self._recording = True
+        self.record_btn.setEnabled(False)
+        duration = 4 if self._current_sample >= 5 else 3
+        self.voice_status.setText(f"Gravando... ({duration}s)")
+        self.voice_status.setStyleSheet("color: #ff453a; font-weight: 500;")
+        self.dots[self._current_sample].setStyleSheet("background: #ff453a; border-radius: 4px;")
 
-    def record_voice(self):
-        self.voice_btn.setEnabled(False)
-        self.voice_status.setText("GRAVANDO... FALE AGORA")
-        self.voice_status.setStyleSheet("color: #ff3b30; font-weight: bold;")
-        
-        import pyaudio
-        import wave
-        
         def _rec():
+            import pyaudio
+            import numpy as _np
             try:
                 p = pyaudio.PyAudio()
                 stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
                 frames = []
-                for _ in range(0, int(16000 / 1024 * 10)): # 10 seg
+                for _ in range(0, int(16000 / 1024 * duration)):
                     frames.append(stream.read(1024))
                 stream.stop_stream()
                 stream.close()
                 p.terminate()
-                
-                os.makedirs("memory_db", exist_ok=True)
-                with wave.open("memory_db/user_voice.wav", 'wb') as wf:
+
+                audio_np = _np.frombuffer(b''.join(frames), dtype=_np.int16).astype(_np.float32) / 32768.0
+                self._audio_samples.append(audio_np)
+
+                import wave
+                memory_db_dir = os.path.expanduser("~/Documents/pessoal/agent/memory_db")
+                os.makedirs(memory_db_dir, exist_ok=True)
+                filename = os.path.join(memory_db_dir, f"voice_sample_{self._current_sample + 1}.wav")
+                with wave.open(filename, 'wb') as wf:
                     wf.setnchannels(1)
-                    wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
+                    wf.setsampwidth(2)
                     wf.setframerate(16000)
                     wf.writeframes(b''.join(frames))
-                
-                QMetaObject.invokeMethod(self.voice_status, "setText", Qt.ConnectionType.QueuedConnection, Q_ARG(str, "✅ ASSINATURA REGISTRADA"))
-                QMetaObject.invokeMethod(self.voice_status, "setStyleSheet", Qt.ConnectionType.QueuedConnection, Q_ARG(str, "color: #34c759; font-weight: bold; border: none;"))
+
+                QTimer.singleShot(0, self._on_sample_done)
             except Exception as e:
                 print(f"Erro na gravação: {e}")
-            
+                QTimer.singleShot(0, self._on_sample_error)
+
         threading.Thread(target=_rec, daemon=True).start()
 
-class BrainsPage(StyledPage):
-    def __init__(self, parent=None):
-        super().__init__("NÚCLEO NEURAL", "Configure suas conexões de nuvem.", parent)
-        self.inputs = {}
-        keys = [("DEEPSEEK_API_KEY", "DeepSeek API"), ("ANTHROPIC_API_KEY", "Anthropic Claude"), ("GOOGLE_GENERATIVE_AI_API_KEY", "Google Gemini Pro")]
-        for env, label in keys:
-            self.add_label(label)
-            edit = QLineEdit()
-            edit.setEchoMode(QLineEdit.EchoMode.Password)
-            self.layout.addWidget(edit)
-            self.inputs[env] = edit
-        self.layout.addStretch()
+    def _on_sample_done(self):
+        self.dots[self._current_sample].setStyleSheet("background: #34c759; border-radius: 4px;")
+        self._current_sample += 1
 
-class ForgePage(StyledPage):
+        if self._current_sample < len(self.SAMPLES):
+            self.step_label.setText(f"PASSO {self._current_sample + 1} DE 10")
+            self.prompt_label.setText(self.SAMPLES[self._current_sample][1])
+            self.voice_status.setText("Pressione para gravar")
+            self.voice_status.setStyleSheet("color: rgba(255, 255, 255, 0.4); font-size: 11px;")
+            self.record_btn.setEnabled(True)
+            self._recording = False
+        else:
+            self.voice_status.setText("Processando perfil de voz...")
+            self.voice_status.setStyleSheet("color: #007aff; font-weight: 500;")
+            self.step_label.setText("PERFIL DE VOZ")
+            self.prompt_label.setText("Criando assinatura biométrica...")
+            self.record_btn.hide()
+            threading.Thread(target=self._generate_embedding, daemon=True).start()
+
+    def _on_sample_error(self):
+        self.voice_status.setText("Erro na gravação. Tente novamente.")
+        self.voice_status.setStyleSheet("color: #ff453a; font-weight: 500;")
+        self.record_btn.setEnabled(True)
+        self._recording = False
+
+    def _generate_embedding(self):
+        try:
+            from core.speaker_verification import speaker_verifier
+
+            success = speaker_verifier.enroll_from_samples(self._audio_samples)
+
+            if success:
+                QTimer.singleShot(0, lambda: self.voice_status.setText("Perfil de voz criado com sucesso!"))
+                QTimer.singleShot(0, lambda: self.voice_status.setStyleSheet("color: #34c759; font-weight: 600;"))
+                QTimer.singleShot(0, lambda: self.embedding_status.setText(f"Perfil registrado com {len(self._audio_samples)} amostras. Agora só você pode ativá-lo."))
+                QTimer.singleShot(0, lambda: self.embedding_status.setStyleSheet("color: #34c759; font-size: 11px;"))
+                QTimer.singleShot(0, lambda: self.prompt_label.setText("Perfil registrado!"))
+            else:
+                QTimer.singleShot(0, lambda: self.voice_status.setText("Erro ao criar perfil. Tente novamente."))
+                QTimer.singleShot(0, lambda: self.voice_status.setStyleSheet("color: #ff453a; font-weight: 500;"))
+        except Exception as e:
+            print(f"Erro ao gerar embedding: {e}")
+            QTimer.singleShot(0, lambda: self.voice_status.setText(f"Erro: {e}"))
+            QTimer.singleShot(0, lambda: self.voice_status.setStyleSheet("color: #ff453a; font-weight: 500;"))
+
+
+class ConnectPage(StyledPage):
     def __init__(self, parent=None):
-        super().__init__("FORJA DO DEV", "Integrações para automação total.")
+        super().__init__("Conexões", "Configure suas chaves de API. Deixe vazio para rodar 100% local.", parent)
         self.inputs = {}
-        dev_keys = [("GITHUB_TOKEN", "GitHub Personal Token"), ("LINEAR_API_KEY", "Linear API Key")]
-        for env, label in dev_keys:
-            self.add_label(label)
+        
+        # Container com Scroll para as chaves
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 6px;
+                border-radius: 3px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(255, 255, 255, 0.1);
+                border-radius: 3px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                background: none;
+            }
+        """)
+        
+        scroll_content = QFrame()
+        scroll_content.setStyleSheet("background: transparent; border: none;")
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 8, 0)
+        scroll_layout.setSpacing(10)
+
+        keys = [
+            ("DEEPSEEK_API_KEY", "DeepSeek API (Recomendado)"),
+            ("ANTHROPIC_API_KEY", "Anthropic Claude"),
+            ("GOOGLE_GENERATIVE_AI_API_KEY", "Google Gemini"),
+            ("GITHUB_TOKEN", "GitHub Token (Para ler PRs/Issues)"),
+            ("LINEAR_API_KEY", "Linear API Key (Para tarefas)"),
+        ]
+        
+        for env, label in keys:
+            lbl = QLabel(label)
+            lbl.setStyleSheet("""
+                color: rgba(255, 255, 255, 0.6);
+                font-size: 11px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            """)
+            scroll_layout.addWidget(lbl)
+            
             edit = QLineEdit()
+            edit.setPlaceholderText("sk-..." if "DEEPSEEK" in env else "Cole sua chave aqui")
             edit.setEchoMode(QLineEdit.EchoMode.Password)
-            self.layout.addWidget(edit)
+            edit.setStyleSheet("""
+                QLineEdit {
+                    background: rgba(255, 255, 255, 0.06);
+                    border: 0.5px solid rgba(255, 255, 255, 0.1);
+                    border-radius: 8px;
+                    padding: 8px 12px;
+                    color: white;
+                    font-family: 'Menlo', monospace;
+                    font-size: 12px;
+                }
+                QLineEdit:focus { border-color: #007aff; }
+            """)
+            scroll_layout.addWidget(edit)
             self.inputs[env] = edit
-        self.layout.addStretch()
+
+        self.vision_check = QCheckBox("Habilitar Visão (Qwen2-VL)")
+        self.vision_check.setChecked(True)
+        self.vision_check.setStyleSheet("""
+            QCheckBox {
+                color: rgba(255, 255, 255, 0.7);
+                font-size: 12px;
+                spacing: 8px;
+                margin-top: 10px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 4px;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+            }
+            QCheckBox::indicator:checked {
+                background: #007aff;
+                border-color: #007aff;
+            }
+        """)
+        scroll_layout.addWidget(self.vision_check)
+        scroll_layout.addStretch()
+        
+        scroll.setWidget(scroll_content)
+        self.layout.addWidget(scroll)
+
+        self.mode_label = QLabel("")
+        self.mode_label.setStyleSheet("color: rgba(255, 255, 255, 0.5); font-size: 11px;")
+        self.mode_label.setWordWrap(True)
+        self.layout.addWidget(self.mode_label)
+
+        for edit in self.inputs.values():
+            edit.textChanged.connect(self._update_mode_label)
+        self._update_mode_label()
+
+    def _update_mode_label(self):
+        has_deepseek = bool(self.inputs.get("DEEPSEEK_API_KEY", QLineEdit()).text().strip())
+        has_anthropic = bool(self.inputs.get("ANTHROPIC_API_KEY", QLineEdit()).text().strip())
+        has_google = bool(self.inputs.get("GOOGLE_GENERATIVE_AI_API_KEY", QLineEdit()).text().strip())
+
+        if has_deepseek:
+            self.mode_label.setText("Modo: Cloud (DeepSeek) — sem modelos locais em RAM")
+            self.mode_label.setStyleSheet("color: #34c759; font-size: 11px; font-family: '.AppleSystemUIFont', -apple-system, sans-serif;")
+        elif has_anthropic:
+            self.mode_label.setText("Modo: Cloud (Anthropic Claude) — sem modelos locais em RAM")
+            self.mode_label.setStyleSheet("color: #34c759; font-size: 11px; font-family: '.AppleSystemUIFont', -apple-system, sans-serif;")
+        elif has_google:
+            self.mode_label.setText("Modo: Cloud (Google Gemini) — sem modelos locais em RAM")
+            self.mode_label.setStyleSheet("color: #34c759; font-size: 11px; font-family: '.AppleSystemUIFont', -apple-system, sans-serif;")
+        else:
+            self.mode_label.setText("Modo: Local (DeepSeek-R1 1.5B via MLX) — requer ~2GB de RAM")
+            self.mode_label.setStyleSheet("color: rgba(255, 255, 255, 0.5); font-size: 11px; font-family: '.AppleSystemUIFont', -apple-system, sans-serif;")
+
 
 class SetupWizard(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("OMNISCIENT ACTIVATION")
-        self.setFixedSize(550, 750)
+        self.setWindowTitle("Anders Setup")
+        self.setFixedSize(480, 620)
         self.setModal(True)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        
+
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
-        
+
         self.container = QFrame()
         self.container.setObjectName("MainFrame")
         self.container.setStyleSheet("""
             #MainFrame {
-                background-color: rgba(10, 10, 20, 252);
-                border: 2px solid #00d4ff;
-                border-radius: 20px;
-            }
-            QPushButton {
-                background-color: #00d4ff;
-                color: black;
-                font-weight: 800;
-                border-radius: 8px;
-                padding: 12px;
-                font-family: 'Avenir Next';
-                border: none;
-            }
-            QPushButton:hover { background-color: #00f0ff; }
-            QLineEdit {
-                background: #111111;
-                border: 1px solid #333;
-                border-radius: 6px;
-                padding: 10px;
-                color: white;
-                font-family: 'Menlo';
+                background-color: rgba(28, 28, 30, 0.97);
+                border: 0.5px solid rgba(255, 255, 255, 0.12);
+                border-radius: 16px;
             }
         """)
-        
-        self.cont_layout = QVBoxLayout(self.container)
-        self.cont_layout.setContentsMargins(0, 0, 0, 20)
-        
+
+        cont_layout = QVBoxLayout(self.container)
+        cont_layout.setContentsMargins(0, 0, 0, 16)
+
         self.progress = QProgressBar()
-        self.progress.setFixedHeight(4)
-        self.progress.setStyleSheet("QProgressBar::chunk { background-color: #00d4ff; } background: #111; border: none;")
+        self.progress.setFixedHeight(3)
+        self.progress.setStyleSheet("""
+            QProgressBar { background: rgba(255, 255, 255, 0.06); border: none; }
+            QProgressBar::chunk { background-color: #007aff; border-radius: 1px; }
+        """)
         self.progress.setTextVisible(False)
-        self.cont_layout.addWidget(self.progress)
-        
+        cont_layout.addWidget(self.progress)
+
         header = QHBoxLayout()
         header.addStretch()
         close = QPushButton("×")
-        close.setFixedSize(30, 30)
-        close.setStyleSheet("background: transparent; color: #555; font-size: 24px;")
+        close.setFixedSize(28, 28)
+        close.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: rgba(255, 255, 255, 0.4);
+                font-size: 18px;
+                border: none;
+                border-radius: 14px;
+            }
+            QPushButton:hover { background: rgba(255, 255, 255, 0.08); }
+        """)
         close.clicked.connect(self.reject)
         header.addWidget(close)
-        header.setContentsMargins(0, 5, 15, 0)
-        self.cont_layout.addLayout(header)
+        header.setContentsMargins(0, 8, 12, 0)
+        cont_layout.addLayout(header)
 
         self.stack = QStackedWidget()
         self.p1 = WelcomePage()
-        self.p2 = IdentityPage()
-        self.p3 = BrainsPage()
-        self.p4 = ForgePage()
-        for p in [self.p1, self.p2, self.p3, self.p4]: self.stack.addWidget(p)
-        self.cont_layout.addWidget(self.stack)
-        
+        self.p2 = VoicePage()
+        self.p3 = ConnectPage()
+        for p in [self.p1, self.p2, self.p3]:
+            self.stack.addWidget(p)
+        cont_layout.addWidget(self.stack)
+
         nav = QHBoxLayout()
-        nav.setContentsMargins(40, 0, 40, 30)
-        self.btn_back = QPushButton("ANTERIOR")
-        self.btn_back.setStyleSheet("background: #222; color: #888;")
-        self.btn_next = QPushButton("PRÓXIMO >")
-        self.btn_back.clicked.connect(self.prev_page); self.btn_next.clicked.connect(self.next_page)
-        nav.addWidget(self.btn_back); nav.addSpacing(20); nav.addWidget(self.btn_next)
-        self.cont_layout.addLayout(nav)
-        
+        nav.setContentsMargins(32, 0, 32, 16)
+        self.btn_back = QPushButton("Voltar")
+        self.btn_back.setStyleSheet(_apple_btn_style())
+        self.btn_next = QPushButton("Próximo")
+        self.btn_next.setStyleSheet(_apple_btn_style(accent=True))
+        self.btn_back.clicked.connect(self.prev_page)
+        self.btn_next.clicked.connect(self.next_page)
+        nav.addWidget(self.btn_back)
+        nav.addSpacing(12)
+        nav.addWidget(self.btn_next)
+        cont_layout.addLayout(nav)
+
         self.main_layout.addWidget(self.container)
         self._drag_pos = None
         self.update_ui()
 
     def update_ui(self):
         idx = self.stack.currentIndex()
-        self.progress.setValue(int(((idx+1)/4)*100))
+        total = 3
+        self.progress.setValue(int(((idx + 1) / total) * 100))
         self.btn_back.setVisible(idx > 0)
-        self.btn_next.setText("ATIVAR SISTEMA" if idx == 3 else "PRÓXIMO >")
-        self.btn_next.setStyleSheet("background: #34c759; color: black;" if idx == 3 else "background: #00d4ff; color: black;")
+        if idx == total - 1:
+            self.btn_next.setText("Ativar Sistema")
+            self.btn_next.setStyleSheet("""
+                QPushButton {
+                    background-color: #34c759;
+                    color: white;
+                    font-weight: 600;
+                    border-radius: 8px;
+                    padding: 10px 24px;
+                    font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+                    font-size: 13px;
+                    border: none;
+                }
+                QPushButton:hover { background-color: #2db84e; }
+            """)
+        else:
+            self.btn_next.setText("Próximo")
+            self.btn_next.setStyleSheet(_apple_btn_style(accent=True))
 
     def next_page(self):
-        if self.stack.currentIndex() < 3:
+        if self.stack.currentIndex() < 2:
             self.stack.setCurrentIndex(self.stack.currentIndex() + 1)
             self.update_ui()
-        else: self.finish()
+        else:
+            self.finish()
 
     def prev_page(self):
         self.stack.setCurrentIndex(self.stack.currentIndex() - 1)
@@ -367,14 +575,33 @@ class SetupWizard(QDialog):
 
     def finish(self):
         print("SetupWizard: Finalizando...")
-        env = [f"USER_NAME={self.p1.name_input.text() or 'Mestre'}"]
-        for k, v in self.p3.inputs.items(): env.append(f"{k}={v.text()}")
-        for k, v in self.p4.inputs.items(): env.append(f"{k}={v.text()}")
-        with open(".env", "w") as f: f.write("\n".join(env))
+        env_lines = [f"USER_NAME={self.p1.name_input.text() or 'Mestre'}"]
+        for k, v in self.p3.inputs.items():
+            val = v.text().strip()
+            if val:
+                env_lines.append(f"{k}={val}")
+
+        vision_enabled = "true" if self.p3.vision_check.isChecked() else "false"
+        env_lines.append(f"VISION_ENABLED={vision_enabled}")
+
+        personality = self.p1.personality.currentText()
+        env_lines.append(f"PERSONALITY={personality}")
+
+        # Caminho absoluto para garantir persistência no macOS Bundle
+        env_path = os.path.expanduser("~/Documents/pessoal/agent/.env")
+        os.makedirs(os.path.dirname(env_path), exist_ok=True)
+
+        with open(env_path, "w") as f:
+            f.write("\n".join(env_lines))
+
+        from dotenv import load_dotenv
+        load_dotenv(env_path, override=True)
+
         self.accept()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton: self._drag_pos = event.globalPosition().toPoint()
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event):
         if self._drag_pos is not None:
@@ -382,7 +609,9 @@ class SetupWizard(QDialog):
             self.move(self.x() + delta.x(), self.y() + delta.y())
             self._drag_pos = event.globalPosition().toPoint()
 
-    def mouseReleaseEvent(self, event): self._drag_pos = None
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
