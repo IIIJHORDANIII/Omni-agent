@@ -123,7 +123,12 @@ class MainApp(QApplication):
         # Conexões
         voice_svc = self.chat_window.voice_service
         voice_overlay = self.hud.voice_overlay
-        voice_svc.amplitude_callback = lambda amp: voice_overlay.set_amplitude(min(amp * 80, 1.0))
+        voice_svc.amplitude_callback = lambda amp: voice_overlay.set_spectrum([amp] * 20) # Fallback simples
+        voice_svc.spectrum_callback = lambda spec: voice_overlay.set_spectrum(spec)
+        
+        # Conecta o speaker (Kokoro) ao HUD também
+        if hasattr(self.chat_window.voice_service, 'kokoro'):
+            self.chat_window.voice_service.kokoro.spectrum_callback = lambda spec: voice_overlay.set_spectrum(spec)
         
         self.shared_vision = self.chat_window.llm_client.vision_service
         self.recall = RecallService(self.chat_window.llm_client.manager)
@@ -320,18 +325,26 @@ class MainApp(QApplication):
 
     def _handle_command_cycle(self, text):
         self.hud.display_signal.emit("Processando...", "THINKING", 0)
-        self.hud.voice_signal.emit("LISTENING", False)
+        self.hud.voice_signal.emit("THINKING", True)
+        
         stop_words = ["chega", "para", "parar", "silêncio", "tchau", "obrigado", "valeu", "encerrar", "quieto"]
         is_stop_request = any(word in text.lower() for word in stop_words)
         self.chat_window.process_silent_command(text)
-        if is_stop_request: return
+        
+        if is_stop_request: 
+            self.hud.voice_signal.emit("IDLE", False)
+            return
+            
         while getattr(self.chat_window, 'is_processing', False): time.sleep(0.1)
         while self.chat_window.voice_service.is_speaking: time.sleep(0.1)
+        
         self.hud.display_signal.emit("Ouvindo... (Contínuo)", "LISTENING", 0)
         self.hud.voice_signal.emit("LISTENING", True)
         follow_up_text = self.chat_window.voice_service.listen(continuous_mode=True)
         if follow_up_text and len(follow_up_text.strip()) > 1: self._handle_command_cycle(follow_up_text)
-        else: self.hud.display_signal.emit("Hibernando.", "IDLE", 2000)
+        else: 
+            self.hud.display_signal.emit("Hibernando.", "IDLE", 2000)
+            self.hud.voice_signal.emit("IDLE", False)
 
     def setup_tray(self):
         icon_path = resource_path("src/ui/icon.png")

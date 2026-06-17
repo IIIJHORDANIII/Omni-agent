@@ -93,7 +93,7 @@ class ElevenLabsService:
                 )
 
                 # Salva em arquivo temporário
-                tmp_dir = os.path.expanduser("~/Library/Caches/OmniscientAgent")
+                tmp_dir = os.path.expanduser("~/Library/Caches/AndersAgent")
                 os.makedirs(tmp_dir, exist_ok=True)
                 tmp_path = os.path.join(tmp_dir, f"eleven_{int(time.time())}.mp3")
 

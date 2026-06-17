@@ -62,7 +62,7 @@ def auto_github_pr(repo_name=None, title=None, body=None):
             title=title or f"Update from {current_branch}",
             head=current_branch,
             base="main",
-            body=body or "Pull request gerado automaticamente pelo OmniscientAgent."
+            body=body or "Pull request gerado automaticamente pelo Anders Agent."
         )
         return f"PR Criado com sucesso no repositório {full_repo}!\nResultado: {result}"
     except Exception as e:

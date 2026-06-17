@@ -19,7 +19,7 @@ class EvolutionService:
         """
         print("🧠 Evolution Service: Avaliando tarefa para extração de habilidade...")
         
-        prompt = f"""Você é o arquiteto de evolução do OMNISCIENT.
+        prompt = f"""Você é o arquiteto de evolução do ANDERS.
 Uma tarefa foi concluída com sucesso. Avalie se ela representa um padrão ou fluxo de trabalho complexo que deve ser salvo como uma Habilidade (Skill) permanente para o futuro.
 
 TAREFA ORIGINAL: {task_description}

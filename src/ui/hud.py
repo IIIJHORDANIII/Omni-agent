@@ -50,8 +50,8 @@ class HUDOverlay(QWidget):
     def _handle_voice_overlay(self, state, visible):
         if visible:
             self.voice_overlay.set_state(state.lower())
-            # Esconde o container principal se estiver ouvindo para priorizar a wave
-            if state.lower() == "listening":
+            # Esconde o container principal para priorizar a wave em estados ativos
+            if state.lower() in ["listening", "thinking", "processing", "speaking"]:
                 self.container.hide()
         else:
             self.voice_overlay.set_state("idle")
@@ -69,8 +69,8 @@ class HUDOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) # Click-through total
 
-        # LARGURA UNIFICADA: 240px
-        self.setFixedWidth(240)
+        # LARGURA UNIFICADA: 180px
+        self.setFixedWidth(180)
         
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)

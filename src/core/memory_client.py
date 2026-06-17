@@ -5,7 +5,7 @@ import subprocess
 class MemoryClient:
     """
     Cliente de Memória integrado com o ecossistema ai-memory (MCP).
-    Atua como uma ponte entre o agente Omniscient e a memória persistente do projeto.
+    Atua como uma ponte entre o agente Anders e a memória persistente do projeto.
     """
     def __init__(self, memory_file="agent_memory.json", index_file="agent_memory.index"):
         # Mantemos as referências para compatibilidade de init, 

@@ -20,30 +20,61 @@ class GhostPopup(QWidget):
         
         self.container = QFrame()
         self.container.setStyleSheet("""
-            background-color: rgba(20, 20, 25, 230);
-            border: 2px solid #af52de;
-            border-radius: 15px;
+            QFrame {
+                background-color: rgba(28, 28, 30, 0.92);
+                border: 0.5px solid rgba(175, 82, 222, 0.4);
+                border-radius: 12px;
+            }
         """)
         
         layout = QVBoxLayout(self.container)
         
-        self.title = QLabel("Sugestão do Ghost Programmer")
-        self.title.setStyleSheet("color: #af52de; font-weight: bold; font-size: 12px;")
+        self.title = QLabel("Ghost Programmer")
+        self.title.setStyleSheet("""
+            color: #bf5af2;
+            font-weight: 600;
+            font-size: 13px;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+        """)
         
         self.description = QLabel("Descrição da melhoria...")
-        self.description.setStyleSheet("color: white; font-size: 11px;")
+        self.description.setStyleSheet("""
+            color: rgba(255, 255, 255, 0.75);
+            font-size: 12px;
+            font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+        """)
         self.description.setWordWrap(True)
         
         btn_layout = QHBoxLayout()
         self.btn_apply = QPushButton("Aplicar")
         self.btn_apply.setStyleSheet("""
-            background-color: #4cd964; color: black; font-weight: bold; border-radius: 5px; padding: 5px;
+            QPushButton {
+                background-color: #34c759;
+                color: white;
+                font-weight: 600;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+                font-size: 12px;
+                border: none;
+            }
+            QPushButton:hover { background-color: #2db84e; }
         """)
         self.btn_apply.clicked.connect(self._on_apply)
         
         self.btn_ignore = QPushButton("Ignorar")
         self.btn_ignore.setStyleSheet("""
-            background-color: #ff3b30; color: white; font-weight: bold; border-radius: 5px; padding: 5px;
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.08);
+                color: rgba(255, 255, 255, 0.85);
+                font-weight: 500;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-family: '.AppleSystemUIFont', -apple-system, sans-serif;
+                font-size: 12px;
+                border: 0.5px solid rgba(255, 255, 255, 0.1);
+            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); }
         """)
         self.btn_ignore.clicked.connect(self._on_ignore)
         

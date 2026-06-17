@@ -33,7 +33,7 @@ class PersistentShell:
             env=os.environ.copy()
         )
         
-        self.sentinel = f"__OMNI_DONE_{uuid.uuid4().hex}__"
+        self.sentinel = f"__ANDERS_DONE_{uuid.uuid4().hex}__"
         self._initialized = True
         print("PersistentShell: Sessão ZSH iniciada.")
 

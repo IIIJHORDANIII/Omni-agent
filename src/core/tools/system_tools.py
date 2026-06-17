@@ -31,7 +31,8 @@ def open_app(app=None, app_name=None, path=None, folder=None):
 def open_url(url=None, link=None, browser=None):
     target_url = url or link or ""
     if not target_url: return "Faltou a URL."
-    return ExecutionService.open_url(target_url, browser=browser)
+    # Sempre usa o navegador padrão do sistema — ignora o parâmetro browser
+    return ExecutionService.open_url(target_url, browser=None)
 
 @tool_registry.register(name="memory_write", aliases=["save_fact"])
 def memory_write(key=None, path=None, value=None, body=None):
@@ -50,12 +51,13 @@ def memory_query(key=None, query=None):
         return "Memórias encontradas:\n" + "\n".join(relevant)
     return memory.get_fact(target_query)
 
-@tool_registry.register(name="create_note", aliases=["create_new_note"])
+@tool_registry.register(name="create_note", aliases=["create_new_note", "nota", "criar_nota"])
 def create_note(title=None, path=None, name=None, content=None, body=None):
-    note_name = title or path or name or "Nota sem título.txt"
-    if not note_name.endswith(".txt") and not "." in note_name:
-        note_name += ".txt"
+    note_name = title or name or path or "Nota do Anders"
+    # NÃO adiciona .txt — o app Notas do macOS cria notas HTML, não arquivos .txt
     note_content = content or body or ""
+    if not note_content:
+        return "Forneça o conteúdo da nota. Use: create_note(title='Título', content='Conteúdo aqui')"
     return ExecutionService.create_new_note(note_name, note_content)
 
 @tool_registry.register(name="web_search")

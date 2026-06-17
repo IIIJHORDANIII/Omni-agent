@@ -1,16 +1,14 @@
 import threading
-import mlx.core as mx
 import gc
+import os
+
 
 class ModelArbiter:
-    """
-    Coordena o carregamento e descarregamento de modelos pesados no Metal.
-    Evita que Whisper, Vision e LLM colidam em memória.
-    """
     _instance = None
     _lock = threading.Lock()
-    _active_model = None # "WHISPER", "VISION", "LLM"
-    _unloaders = {} # model_type -> callback
+    _active_model = None
+    _unloaders = {}
+    _cloud_mode = None
 
     def __new__(cls):
         with cls._lock:
@@ -18,33 +16,51 @@ class ModelArbiter:
                 cls._instance = super(ModelArbiter, cls).__new__(cls)
             return cls._instance
 
+    def _is_cloud(self):
+        if self._cloud_mode is not None:
+            return self._cloud_mode
+        provider = os.getenv("LLM_PROVIDER", "").upper()
+        if provider == "LOCAL" or provider == "MLX":
+            self._cloud_mode = False
+            return False
+        if os.getenv("DEEPSEEK_API_KEY", "").strip() or \
+           os.getenv("ANTHROPIC_API_KEY", "").strip() or \
+           os.getenv("GOOGLE_GENERATIVE_AI_API_KEY", "").strip():
+            self._cloud_mode = True
+            return True
+        self._cloud_mode = False
+        return False
+
     def register_unloader(self, model_type, callback):
-        """Registra uma função que sabe como 'deletar' o modelo da RAM."""
         self._unloaders[model_type] = callback
 
     def request_model(self, model_type):
-        """Solicita permissão para usar um modelo, descarregando outros se necessário."""
+        if self._is_cloud():
+            print(f"Arbiter: Modo Cloud ativo. {model_type} compartilha GPU sem restrições.")
+            return True
+
         with self._lock:
             if self._active_model == model_type:
                 return True
 
             print(f"Arbiter: Solicitando {model_type}. Liberando {self._active_model}...")
-            
-            # Se havia um modelo ativo e ele tem um unloader registrado, chama-o
+
             if self._active_model in self._unloaders:
                 try:
                     self._unloaders[self._active_model]()
                 except Exception as e:
-                    print(f"Arbiter: Erro ao rodar unloader de {self._active_model}: {e}")
+                    print(f"Arbiter: Erro ao descarregar {self._active_model}: {e}")
 
             self._unload_all()
             self._active_model = model_type
             return True
 
     def _unload_all(self):
-        """Limpa cache do MLX e chama o coletor de lixo agressivamente."""
         try:
+            import mlx.core as mx
             mx.clear_cache()
+            gc.collect()
+        except ImportError:
             gc.collect()
         except Exception as e:
             print(f"Arbiter: Erro ao limpar memória: {e}")
@@ -54,5 +70,5 @@ class ModelArbiter:
             self._unload_all()
             self._active_model = None
 
-# Instância global
+
 arbiter = ModelArbiter()

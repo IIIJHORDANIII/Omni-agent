@@ -12,7 +12,10 @@ class AssetHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         if not event.is_directory and event.src_path.lower().endswith(self.extensions):
-            # Pequeno delay para garantir que o arquivo foi totalmente salvo (ex: export do Figma)
+            filename = os.path.basename(event.src_path)
+            # Ignora arquivos ocultos do macOS (começam com .)
+            if filename.startswith('.'):
+                return
             time.sleep(1)
             self.process_image(event.src_path)
 

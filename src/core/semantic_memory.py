@@ -34,7 +34,7 @@ class SemanticMemory:
         
         # Cria ou obtém a coleção principal
         self.collection = self.client.get_or_create_collection(
-            name="omniscient_facts",
+            name="anders_facts",
             embedding_function=self.embed_fn
         )
         

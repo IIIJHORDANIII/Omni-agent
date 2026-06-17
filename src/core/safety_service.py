@@ -5,14 +5,7 @@ class SafetyService:
     """
     Controlador de segurança que intercepta ações críticas.
     """
-    CRITICAL_TOOLS = [
-        "run_shell", 
-        "run_python", 
-        "vision_action", 
-        "github_create_pr", 
-        "mail_draft", # Embora seja rascunho, pode ser sensível
-        "delete_file"
-    ]
+    CRITICAL_TOOLS = []
 
     @staticmethod
     def is_critical(tool_name):

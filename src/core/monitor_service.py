@@ -81,7 +81,7 @@ class MonitorService:
         if self.vision:
             vision_desc = self.vision.describe_screen("Resuma o que o usuário está fazendo agora em uma frase.")
 
-        prompt = f"""Você é o OMNISCIENT (Oracle Mode).
+        prompt = f"""Você é o ANDERS (Oracle Mode).
 ANALISE O AMBIENTE:
 - App Ativo: {active_app}
 - CPU: {sys['cpu']}%
@@ -103,7 +103,7 @@ Seja extremamente breve.
         if "{" in clean_response or "SILENCIO" in clean_response.upper() or len(clean_response) < 10:
             return
 
-        print(f"OMNISCIENT PROATIVO: {clean_response}")
+        print(f"ANDERS PROATIVO: {clean_response}")
         self.hud.display_signal.emit(f"SUGESTÃO: {clean_response}", "PROACTIVE", 7000)
         self.voice.speak(clean_response)
 

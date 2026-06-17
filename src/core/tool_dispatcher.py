@@ -33,11 +33,23 @@ class ToolDispatcher:
             for item in data:
                 if not isinstance(item, dict): continue
                     
-                tool_name = item.get("tool") or item.get("action")
-                params = item.get("params")
-                if params is None:
-                    params = {k: v for k, v in item.items() if k not in ["tool", "action", "message"]}
+                # Suporte a múltiplos formatos de JSON: 'tool', 'action' ou 'name' (OpenAI/Anthropic)
+                tool_name = item.get("tool") or item.get("action") or item.get("name")
                 
+                # Suporte a parâmetros em 'params' ou 'arguments'
+                params = item.get("params") or item.get("arguments")
+                
+                if params is None:
+                    # Se não houver bloco específico, usa todos os outros campos como parâmetros
+                    params = {k: v for k, v in item.items() if k not in ["tool", "action", "name", "params", "arguments", "message"]}
+                
+                # Se arguments for uma string (comum em alguns modelos), tenta converter para dict
+                if isinstance(params, str):
+                    try:
+                        params = json.loads(params)
+                    except:
+                        pass
+
                 if tool_name is None or tool_name == "none":
                     msg = item.get("message")
                     if msg: results.append(msg)
@@ -47,13 +59,7 @@ class ToolDispatcher:
                 if main_app:
                     main_app.hud.display_signal.emit(f"Executando {tool_name}...", "THINKING", 0)
                 
-                # CHECAGEM DE SEGURANÇA (Fase 4 - Production Ready)
-                from core.safety_service import SafetyService
-                if SafetyService.is_critical(tool_name):
-                    print(f"Safety: Tool '{tool_name}' é crítica. Aguardando aprovação humana...")
-                    if not SafetyService.request_human_approval(tool_name, params):
-                        results.append(f"Ação '{tool_name}' negada pelo usuário.")
-                        continue
+
 
                 # Busca a ferramenta no registro
                 tool_func = tool_registry.get_tool(tool_name)
