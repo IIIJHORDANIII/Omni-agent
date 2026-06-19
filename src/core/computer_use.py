@@ -1,4 +1,15 @@
-import pyautogui
+try:
+    import pyautogui
+except ImportError:  # pragma: no cover
+    # Fallback stub for environments without pyautogui (e.g., missing dependencies)
+    class _PyAutoGuiStub:
+        FAILSAFE = True
+        def __getattr__(self, name):
+            def _missing(*args, **kwargs):
+                print(f"[pyautogui stub] Called {name} with args={args}, kwargs={kwargs} – no operation performed.")
+                return None
+            return _missing
+    pyautogui = _PyAutoGuiStub()
 import time
 import os
 

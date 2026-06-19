@@ -5,7 +5,7 @@ import threading
 import subprocess
 import psutil
 import time
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # keep for .env loading
 
 # CRÍTICO: Previne loop infinito de instâncias no modo empacotado (.app)
 # Deve ser a primeira coisa no arquivo, antes de qualquer import pesado
@@ -23,7 +23,7 @@ os.environ["CHROMA_TELEMETRY"] = "False"
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 # Caminho persistente para o arquivo .env
-ENV_PATH = os.path.expanduser("~/Documents/pessoal/agent/.env")
+ENV_PATH = os.path.expanduser("~/.config/anders/.env")
 
 def resource_path(relative_path):
     """Retorna o caminho absoluto para recursos, funcionando em dev e bundle."""
@@ -42,6 +42,7 @@ from PyQt6.QtCore import QTimer, QLockFile
 
 from core.registry import registry
 from ui.chat_window import ChatWindow
+from ui.spotlight_chat import SpotlightChat
 from ui.hud import HUDOverlay
 from utils.hotkeys import GlobalHotkeyHandler
 from core.monitor_service import MonitorService
@@ -84,7 +85,10 @@ class MainApp(QApplication):
             except Exception as e:
                 print(f"Aviso: Não foi possível definir LSUIElement: {e}")
 
-        # 0. Verificação de Setup
+        # Setup wizard removed: configuration is expected to exist at ENV_PATH.
+        if not os.path.exists(ENV_PATH):
+            os.makedirs(os.path.dirname(ENV_PATH), exist_ok=True)
+            open(ENV_PATH, 'a').close()
         if not os.path.exists(ENV_PATH):
             os.makedirs(os.path.dirname(ENV_PATH), exist_ok=True)
             from ui.setup_wizard import SetupWizard
@@ -93,6 +97,11 @@ class MainApp(QApplication):
                 sys.exit(0)
         
         load_dotenv(ENV_PATH, override=True)
+        # Carrega variáveis de configuração adicionais
+        from core.config_loader import load_user_config
+        load_user_config()
+        # O gerenciamento de LLMs locais foi removido; use APIs externas conforme configurado.
+
         from core.llm_manager import LLMManager
         _detected_provider = LLMManager._detect_provider()
         print(f"Anders: Provider detectado = {_detected_provider}")
@@ -109,6 +118,7 @@ class MainApp(QApplication):
         from ui.permission_gate import PermissionGate
         self.hud = HUDOverlay()
         self.chat_window = ChatWindow()
+        self.spotlight = SpotlightChat()
         self.ghost_popup = GhostPopup()
         self.ghost_popup.applied.connect(self._apply_ghost_fix)
         self.permission_gate = PermissionGate()
@@ -176,12 +186,16 @@ class MainApp(QApplication):
         self.monitor.vision = self.shared_vision
         
         self.hotkey_handler = GlobalHotkeyHandler()
-        self.hotkey_handler.chat_requested.connect(self.chat_window.show_and_activate)
+        # Connect Spotlight shortcut
+        self.hotkey_handler.spotlight_requested.connect(self.spotlight.show_overlay)
+        # Chat shortcut disabled (no connection)
+        # self.hotkey_handler.chat_requested.connect(self.chat_window.show_and_activate)
         self.hotkey_handler.voice_requested.connect(self.on_voice_requested)
+        self.hotkey_handler.start()
         
         self.setup_tray()
         self.chat_window.voice_service.status_callback = lambda state, visible: self.hud.voice_signal.emit(state, visible)
-        self.chat_window.voice_service.start_listening_mode()
+        # self.chat_window.voice_service.start_listening_mode()  # Listening starts via shortcut
         
         print("Anders: Aguardando estabilização do hardware...")
         QTimer.singleShot(3000, self._start_delayed_services)
@@ -295,18 +309,17 @@ class MainApp(QApplication):
         finally: self.hud.voice_signal.emit("LISTENING", False)
 
     def on_voice_requested(self):
+        """Shortcut ⌘ Cmd + Shift Enter.
+        Starts a single listening session without wake‑word."""
+        # If a voice output is currently playing, stop it
         if self.chat_window.voice_service.is_speaking:
             self.chat_window.voice_service.stop_speaking()
             return
-        is_active = self.chat_window.voice_service.toggle_continuous_mode()
-        if is_active:
-            self.hud.display_signal.emit("MODO CONTÍNUO: ATIVADO", "LISTENING", 3000)
-            self.sound.wake()
-            if not getattr(self, "_voice_cycle_active", False):
-                threading.Thread(target=self._acquire_and_process_command, daemon=True).start()
-        else:
-            self.hud.display_signal.emit("MODO CONTÍNUO: DESATIVADO", "IDLE", 3000)
-            self.chat_window.voice_service.abort_listen = True
+        # Show HUD feedback
+        self.hud.display_signal.emit("Escutando...", "LISTENING", 0)
+        self.hud.voice_signal.emit("LISTENING", True)
+        # Run listening in background thread (apenas single-shot)
+        threading.Thread(target=self._listen_after_wake_word, daemon=True).start()
 
     def _acquire_and_process_command(self):
         self._voice_cycle_active = True
@@ -353,20 +366,12 @@ class MainApp(QApplication):
         self.tray_icon.setToolTip("Anders Agent")
         self.chat_window.set_tray_icon(self.tray_icon)
         menu = QMenu()
-        menu.addAction("Abrir Chat", self.chat_window.show_and_activate)
-        menu.addSeparator()
+        # O ChatWindow original é apenas um motor de processamento em fallback agora.
+        # menu.addAction("Abrir Chat", self.chat_window.show_and_activate)
         menu.addAction("Sair", self.quit)
         self.tray_icon.setContextMenu(menu)
         self.tray_icon.show()
-
 def main():
-    # Single Instance Lock
-    lock_path = os.path.expanduser("~/Documents/pessoal/agent/anders.lock")
-    lock_file = QLockFile(lock_path)
-    if not lock_file.tryLock(100):
-        print("Anders: Outra instância já está rodando. Encerrando.")
-        return
-
     try:
         app = MainApp(sys.argv)
         sys.exit(app.exec())

@@ -27,16 +27,15 @@ class ChatWindow(QWidget):
         self.llm_client = LLMClient()
         self.voice_service = VoiceService(on_wake_word_detected=None)
         
+        # O usuário pediu para não restaurar contexto antigo entre reinicializações do app.
+        # Começamos com a memória zerada.
         from core.session_persistence import session_persistence
-        saved_state = session_persistence.load()
-        self.chat_history = saved_state.get("messages", [])
+        self.chat_history = []
+        session_persistence.save(messages=self.chat_history)
         
         self.tray_icon = None
         self.is_processing = False
         self.init_ui()
-        
-        if self.chat_history:
-            self._rebuild_ui_from_history()
         
         self.append_text_signal.connect(self._safe_append_to_history)
         self.update_mic_text_signal.connect(self._safe_update_mic_text)

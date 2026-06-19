@@ -249,9 +249,21 @@ class AutoOrganizerService:
         """Inicia o monitoramento da pasta."""
         if not os.path.exists(self.watch_path): return
         
+        if observer:
+            self.observer = observer
+            is_external = True
+        else:
+            is_external = False
+            
         handler = OrganizerHandler(self.watch_path, self.llm_client)
-        self.observer.schedule(handler, self.watch_path, recursive=False)
-        self.observer.start()
+        existing_paths = {w.path for w in getattr(self.observer, "watches", [])}
+        
+        if self.watch_path not in existing_paths:
+            self.observer.schedule(handler, self.watch_path, recursive=False)
+        
+        if not is_external:
+            self.observer.start()
+            
         print(f"Auto-Organizer: Monitorando {self.watch_path}")
 
     def stop(self):

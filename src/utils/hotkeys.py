@@ -19,6 +19,20 @@ def _get_keyboard():
 class GlobalHotkeyHandler(QObject):
     chat_requested = pyqtSignal()
     voice_requested = pyqtSignal()
+    spotlight_requested = pyqtSignal()
+    # Track Command key timestamps for double press
+    _last_cmd_time = 0.0
+    _cmd_press_interval = 0.4  # seconds (adjustable)
+    _cmd_press_count = 0
+    chat_requested = pyqtSignal()
+    voice_requested = pyqtSignal()
+    spotlight_requested = pyqtSignal()
+    # Track Command key timestamps for double press
+    _last_cmd_time = 0.0
+    _cmd_press_interval = 0.4  # seconds (adjustable)
+    _cmd_press_count = 0
+    chat_requested = pyqtSignal()
+    voice_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -31,11 +45,8 @@ class GlobalHotkeyHandler(QObject):
             print("Hotkeys: pynput não disponível, atalhos desabilitados.")
             return
 
-        self.chat_target = {
-            keyboard.Key.cmd,
-            keyboard.Key.shift,
-            keyboard.KeyCode.from_char('o')
-        }
+        # Disabled chat shortcut (Shift+Cmd+O) – no longer used
+        self.chat_target = set()
         self.voice_target = {
             keyboard.Key.cmd,
             keyboard.Key.shift,
@@ -67,13 +78,33 @@ class GlobalHotkeyHandler(QObject):
 
         self.current_keys.add(k)
 
-        if hasattr(self, 'chat_target') and all(tk in self.current_keys for tk in self.chat_target):
-            print("Atalho de Chat detectado!")
-            self.chat_requested.emit()
+        # Chat shortcut disabled – no action
+        # Spotlight shortcut: Double tap Cmd
+        is_current_key_cmd = k in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
+        if is_current_key_cmd:
+            import time
+            now = time.time()
+            if now - self._last_cmd_time <= self._cmd_press_interval:
+                self._cmd_press_count += 1
+            else:
+                self._cmd_press_count = 1
+            self._last_cmd_time = now
+            if self._cmd_press_count == 2:
+                print("Spotlight shortcut detected!")
+                self.spotlight_requested.emit()
+                self._cmd_press_count = 0
+                self.current_keys.clear()
 
-        if hasattr(self, 'voice_target') and all(tk in self.current_keys for tk in self.voice_target):
+        # Voice shortcut: Cmd + Shift + Enter
+        has_cmd = any(k in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r) for k in self.current_keys)
+        has_shift = any(k in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r) for k in self.current_keys)
+        has_enter = keyboard.Key.enter in self.current_keys
+        
+        if has_cmd and has_shift and has_enter:
             print("Atalho de Voz detectado!")
             self.voice_requested.emit()
+            # Clear keys to prevent rapid repeated firings
+            self.current_keys.clear()
 
     def on_release(self, key):
         keyboard = _get_keyboard()
