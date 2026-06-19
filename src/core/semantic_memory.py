@@ -22,7 +22,7 @@ class SemanticMemory:
         if self._initialized: return
         
         # Caminho para persistência local
-        self.db_path = os.path.expanduser("~/Documents/pessoal/agent/memory_db")
+        self.db_path = os.path.expanduser("~/.config/anders/memory_db")
         os.makedirs(self.db_path, exist_ok=True)
         
         # Inicializa cliente Chroma

@@ -7,8 +7,8 @@ class SessionPersistence:
     Garante a continuidade da sessão salvando o estado do Agente.
     Permite retomar conversas e tarefas após reinicialização.
     """
-    def __init__(self, persistence_file="memory_db/session_state.json"):
-        self.persistence_file = persistence_file
+    def __init__(self, persistence_file="~/.config/anders/session_state.json"):
+        self.persistence_file = os.path.expanduser(persistence_file)
         self.state = {
             "last_active": 0,
             "messages": [],

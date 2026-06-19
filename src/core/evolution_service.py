@@ -9,7 +9,7 @@ class EvolutionService:
     """
     def __init__(self, llm_manager=None):
         self.llm = llm_manager or LLMManager()
-        self.skills_dir = os.path.expanduser("~/Documents/pessoal/agent/src/skills")
+        self.skills_dir = os.path.expanduser("~/.config/anders/src/skills")
         os.makedirs(self.skills_dir, exist_ok=True)
         
     def evaluate_and_evolve(self, task_description, steps_taken, final_result):

@@ -36,7 +36,7 @@ class SpeakerVerifier:
         self.reference_embedding = None
         self.device = 'cpu'
         self.threshold = 0.65
-        self.embedding_path = os.path.expanduser("~/Documents/pessoal/agent/memory_db/speaker_embedding.npy")
+        self.embedding_path = os.path.expanduser("~/.config/anders/memory_db/speaker_embedding.npy")
         self.model_name = "campplus"
         self.sample_rate = 16000
         self._initialized = True

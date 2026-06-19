@@ -274,7 +274,7 @@ class VoicePage(StyledPage):
                 self._audio_samples.append(audio_np)
 
                 import wave
-                memory_db_dir = os.path.expanduser("~/Documents/pessoal/agent/memory_db")
+                memory_db_dir = os.path.expanduser("~/.config/anders/memory_db")
                 os.makedirs(memory_db_dir, exist_ok=True)
                 filename = os.path.join(memory_db_dir, f"voice_sample_{self._current_sample + 1}.wav")
                 with wave.open(filename, 'wb') as wf:
@@ -588,7 +588,7 @@ class SetupWizard(QDialog):
         env_lines.append(f"PERSONALITY={personality}")
 
         # Caminho absoluto para garantir persistência no macOS Bundle
-        env_path = os.path.expanduser("~/Documents/pessoal/agent/.env")
+        env_path = os.path.expanduser("~/.config/anders/.env")
         os.makedirs(os.path.dirname(env_path), exist_ok=True)
 
         with open(env_path, "w") as f:

@@ -377,7 +377,7 @@ def main():
         sys.exit(app.exec())
     except Exception as e:
         import traceback
-        crash_log = os.path.expanduser("~/Documents/pessoal/agent/crash_report.txt")
+        crash_log = os.path.expanduser("~/.config/anders/crash_report.txt")
         os.makedirs(os.path.dirname(crash_log), exist_ok=True)
         with open(crash_log, "w") as f:
             f.write(f"ERRO CRÍTICO NA INICIALIZAÇÃO:\n{str(e)}\n\n{traceback.format_exc()}")

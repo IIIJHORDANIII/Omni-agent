@@ -22,7 +22,7 @@ class TaskManager:
     def __init__(self, llm_client=None):
         self.llm = llm_client
         self.tasks = []
-        self._tasks_file = os.path.expanduser("~/Documents/pessoal/agent/tasks.json")
+        self._tasks_file = os.path.expanduser("~/.config/anders/tasks.json")
         self._lock = threading.Lock()
         self._load_tasks()
 
